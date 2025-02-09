@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import logging
+from typing import Final
 
 from nes.apu import Apu
 from nes.ppu import Ppu
@@ -37,48 +38,55 @@ class Cpu:
 			self, *,
 			rom_prg: bytes, ppu: Ppu, apu: Apu, stop_on_brk: bool = False, log_instructions: bool = False):
 
-		self.rom_prg = rom_prg
-		self.ppu = ppu
-		self.apu = apu
-		self.stop_on_brk = stop_on_brk
+		self.rom_prg: Final[bytes] = rom_prg
+		self.ppu: Final[Ppu] = ppu
+		self.apu: Final[Apu] = apu
+		self.stop_on_brk: bool = stop_on_brk
 
-		self.ram = bytearray(2048)
+		self.ram: Final[bytearray] = bytearray(2048)
 
 		logging.debug(f'len(rom_prg)=0x{len(rom_prg):04X}')
 
-		self.nmi = self.read16(0xFFFA)
-		self.reset = self.read16(0xFFFC)
-		self.irq = self.read16(0xFFFE)
+		self.nmi: Final[pointer16] = self.read16(0xFFFA)
+		self.reset: Final[pointer16] = self.read16(0xFFFC)
+		self.irq: Final[pointer16] = self.read16(0xFFFE)
 
 		logging.debug(f'NMI: 0x{self.nmi:04X}')
 		logging.debug(f'RESET: 0x{self.reset:04X}')
 		logging.debug(f'IRQ: 0x{self.irq:04X}')
 
 		# CPU state
-		self.sp = 0xFD
-		self.pc = self.reset
-		self.a = 0
-		self.x = 0
-		self.y = 0
+		self.sp: uint8 = 0xFD
+		self.pc: pointer16 = self.reset
+		self.a: uint8 = 0
+		self.x: uint8 = 0
+		self.y: uint8 = 0
 
-		self.n = False
-		self.v = False
-		self.b = False
-		self.d = False
-		self.i = True
-		self.z = False
-		self.c = False
+		self.n: bool = False
+		self.v: bool = False
+		self.b: bool = False
+		self.d: bool = False
+		self.i: bool = True
+		self.z: bool = False
+		self.c: bool = False
 
-		self.clock = 0
+		self.vblank_needs_handling: bool = False
+
+		# TODO: use a weakref (this leads to circular reference, not sure if Python gc can handle it properly)
+		ppu.vblank_start_callback = self.vblank_start_callback
 
 		# Detect repeated reads to $2002
 		# TODO: smarter, more general purpose "PPU read loop" detector
-		self.read_ppustatus_counter = 0
-		self.last_ppustatus = 0
+		self.read_ppustatus_counter: uint8 = 0
+		self.last_ppustatus: uint8 = 0
 
 		self.instruction_logger = None
 		if log_instructions:
 			self.instruction_logger = logging.getLogger('instructions')
+
+		# These are just for debugging
+		self.clock: int = 0
+		self.vblank_count: int = 0
 
 	# Status register
 
@@ -119,7 +127,7 @@ class Cpu:
 
 	# Read & write memory
 
-	def read(self, addr: pointer16) -> int:
+	def read(self, addr: pointer16) -> uint8:
 
 		assert 0 <= addr < 65536, f'Invalid address: {addr}'
 
@@ -132,6 +140,7 @@ class Cpu:
 			wrapped_addr = 0x2000 + (addr & 0x07)
 			value = self.ppu.read_reg_from_cpu(wrapped_addr)
 			if wrapped_addr == 0x2002:
+				# TODO: move PPUSTATUS detector into its own class
 				if value == self.last_ppustatus:
 					self.read_ppustatus_counter += 8
 					if self.read_ppustatus_counter >= 16:
@@ -421,13 +430,34 @@ class Cpu:
 		"""
 		return self.read(self._addr_indirect_y_addr())
 
+	# VBLANK/NMI
+
+	def vblank_start_callback(self) -> None:
+		self.vblank_needs_handling = True
+
+	def _handle_vblank(self) -> None:
+		self.vblank_needs_handling = False
+		self.clock = 0
+		self.vblank_count += 1
+		if self.ppu.nmi:
+			self._handle_nmi()
+
+	def _handle_nmi(self) -> None:
+		self.push16(self.pc + 2)
+		self.push(self.sr)
+		self.b = True
+		self.pc = self.nmi
+		# TODO: is 7 ticks accurate? (I'm assuming it's same as BRK instruction)
+		self._tick_clock(7)
+
 	# Main process function
 
 	def process_instruction(self) -> None:
 
 		self.read_ppustatus_counter = max(0, self.read_ppustatus_counter - 1)
 
-		# TODO: check for interrupts
+		if self.vblank_needs_handling:
+			self._handle_vblank()
 
 		clock_was = self.clock
 		pc_was = self.pc
@@ -1336,7 +1366,11 @@ class Cpu:
 					f'a=0x{self.a:02X} x=0x{self.x:02X} y=0x{self.y:02X} sp={self.sp:3} {self.sr_str}'
 				)
 			else:
-				msg = f'{clock_was:5}, pc=0x{pc_was:04X}, instr=0x{opcode:02X}, {indent + instr_log:48} {self.sr_str}'
+				# msg = f'{clock_was:5}, pc=0x{pc_was:04X}, instr=0x{opcode:02X}, {indent + instr_log:48} {self.sr_str}'
+				msg = (
+					f'{self.ppu.frame_count}, ({self.ppu.row:3}, {self.ppu.col:3}); '
+					f'pc=0x{pc_was:04X}, instr=0x{opcode:02X}, {indent + instr_log:48} {self.sr_str}'
+				)
 
 			if branched is not None:
 				msg += ' (branched)' if branched else ' (no branch)'

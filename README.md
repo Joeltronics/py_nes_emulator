@@ -15,16 +15,17 @@ My main goal is to get this to the point where it can emulate Super Mario Bros -
 
 ### Current status
 
-Very little yet. All documented CPU instructions are emulated (at least in theory - not all are tested). But otherwise:
+Very little yet. All documented CPU instructions are emulated (at least in theory - not all are tested), and basic there's basic PPU functionality. But otherwise:
 
-- No graphics at all yet
-- NMI is not implemented
+- No graphics are being rendered at all yet
 - No controller input
 - No APU
 
+Balloon Fight seems to run without crashing (though it's hard to tell if it's actually emulating properly without graphics). Donkey Kong & Ice Climber both crash from hitting an invalid instruction immediately after an RTS call, so there seems to be a problem with one of the stack-related instructions.
+
 Next goals:
 
-- Emulate NMI
+- Fix the bug causing Donkey Kong & Ice Climber to crash
 - Basic graphics implementation
 - Emulate some simpler ROMS (Balloon Fight, Donkey Kong, Ice Climber)
 
@@ -44,6 +45,7 @@ Try to emulate as much of the PPU behavior on the GPU as possible
 Take a ROM disassembly and JIT compile it into something which can be emulated much more efficiently
 
 Taking a ROM disassembly and converting it into C/C++ code which can then be compiled natively
+
 - No, I don't mean converting it into code which can be compiled into the same assembly - but rather, functionally equivalent code
 - I also wouldn't expect this to be nice clean readable code
 - Similar to what was reportedly done for the original Mega Man Legacy Collection

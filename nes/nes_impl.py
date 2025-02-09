@@ -13,5 +13,5 @@ class Nes:
 
 		self.rom = rom
 		self.apu = Apu()
-		self.ppu = Ppu(rom_chr=self.rom.chr)
+		self.ppu = Ppu(rom_chr=self.rom.chr, rom_header=self.rom.header)
 		self.cpu = Cpu(rom_prg=self.rom.prg, apu=self.apu, ppu=self.ppu)
