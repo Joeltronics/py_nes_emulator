@@ -6,7 +6,9 @@ from typing import Callable, Final
 from nes.rom import INesHeader
 from nes.types import uint8, pointer16
 
-logger = logging.getLogger('ppu')
+
+logger = logging.getLogger(__name__)
+
 
 NAMETABLE_A_VRAM_START: Final[pointer16] = 0x000
 NAMETABLE_B_VRAM_START: Final[pointer16] = 0x400
@@ -18,7 +20,7 @@ NAMETABLE_LAYOUT_VERTICAL: Final[tuple[int, int, int, int]] = (
 
 
 class Ppu:
-	def __init__(self, rom_chr: bytes, rom_header: INesHeader):
+	def __init__(self, rom_chr: bytes, rom_header: INesHeader, *, stop_after_frames: int = 0):
 
 		self.rom_chr: Final[bytes] = rom_chr
 
@@ -28,6 +30,8 @@ class Ppu:
 
 		self.vram: Final[bytearray] = bytearray(2048)
 		self.palette_ram: Final[bytearray] = bytearray(32)
+
+		self.stop_after_frames: int = stop_after_frames
 
 		self.frame_count: int = 0
 		self.row: int = 0
@@ -111,11 +115,14 @@ class Ppu:
 		# Set vblank
 		self.ppustatus |= 0b1000_0000
 		if self.vblank_nmi_enable:
-			logger.debug('VBLANK start (NMI enabled)')
+			logger.debug(f'Frame {self.frame_count} VBLANK start (NMI enabled)')
 			self.nmi = True
 		else:
-			logger.debug('VBLANK start (NMI disabled)')
-		
+			logger.debug(f'Frame {self.frame_count} VBLANK start (NMI disabled)')
+
+		if self.stop_after_frames and self.frame_count >= (self.stop_after_frames - 1):
+			raise StopIteration(f'Hit {self.stop_after_frames} frames')
+
 		if self.vblank_start_callback:
 			self.vblank_start_callback()
 

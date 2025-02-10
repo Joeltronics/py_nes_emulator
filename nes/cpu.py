@@ -2,10 +2,44 @@
 
 import logging
 from typing import Final
+from pathlib import Path
 
 from nes.apu import Apu
 from nes.ppu import Ppu
 from nes.types import uint8, int8, pointer16
+
+
+INSTRUCTION_LOG_FILE: Final = Path('instructions.log')
+
+
+logger = logging.getLogger(__name__)
+
+
+def make_instruction_logger(
+		*,
+		to_file: bool,
+		to_stream: bool,
+		) -> logging.Logger | None:
+
+	if not (to_file or to_stream):
+		return None
+
+	if to_file and not to_stream:
+		# FIXME: this doesn't work
+		# The problem is we're using configuring the root logger, which all logs get propagated to
+		# So trying to create a file-only logger will still get logged to stream!
+		logging.warning("Logging to file but not stream doesn't work; not logging to file")
+		return None
+
+	logger = logging.getLogger('instructions')
+	logger.setLevel(logging.DEBUG)
+
+	if to_file:
+		if INSTRUCTION_LOG_FILE.exists():
+			INSTRUCTION_LOG_FILE.unlink()
+		logger.addHandler(logging.FileHandler(INSTRUCTION_LOG_FILE))
+
+	return logger
 
 
 def _signed(val: uint8) -> int8:
@@ -36,7 +70,13 @@ for sval in [0, 1, 2, -1, -2, 126, 127, -128, -127]:
 class Cpu:
 	def __init__(
 			self, *,
-			rom_prg: bytes, ppu: Ppu, apu: Apu, stop_on_brk: bool = False, log_instructions: bool = False):
+			rom_prg: bytes,
+			ppu: Ppu,
+			apu: Apu,
+			stop_on_brk: bool = False,
+			log_instructions_to_file: bool = False,
+			log_instructions_to_stream: bool = False,
+			):
 
 		self.rom_prg: Final[bytes] = rom_prg
 		self.ppu: Final[Ppu] = ppu
@@ -80,9 +120,10 @@ class Cpu:
 		self.read_ppustatus_counter: uint8 = 0
 		self.last_ppustatus: uint8 = 0
 
-		self.instruction_logger = None
-		if log_instructions:
-			self.instruction_logger = logging.getLogger('instructions')
+		self.instruction_logger = make_instruction_logger(
+			to_file=log_instructions_to_file,
+			to_stream=log_instructions_to_stream,
+		)
 
 		# These are just for debugging
 		self.clock: int = 0
@@ -145,7 +186,7 @@ class Cpu:
 					self.read_ppustatus_counter += 8
 					if self.read_ppustatus_counter >= 16:
 						if self.instruction_logger:
-							self.instruction_logger.info('Detected repeated PPUSTATUS reads, waiting for it to change')
+							self.instruction_logger.debug('Detected repeated PPUSTATUS reads, waiting for it to change')
 						self.ppu.wait_for_ppustatus_change()
 				else:
 					self.read_ppustatus_counter = 0
@@ -220,23 +261,27 @@ class Cpu:
 	def push(self, value: uint8) -> None:
 		self.ram[0x100 + self.sp] = value
 		self.sp = (self.sp - 1) % 256
-		# self.instruction_logger.debug(f'Pushed ${value:02X}, sp={self.sp}')
+		if self.instruction_logger:
+			self.instruction_logger.debug(f'Pushed ${value:02X}, sp={self.sp}')
 
 	def push16(self, value: pointer16) -> None:
 		self.ram[0x100 + self.sp : 0x100 + self.sp + 2] = value.to_bytes(2, byteorder='little')
 		self.sp = (self.sp - 2) % 256
-		# self.instruction_logger.debug(f'Pushed ${value:04X}, sp={self.sp}')
+		if self.instruction_logger:
+			self.instruction_logger.debug(f'Pushed ${value:04X}, sp={self.sp}')
 
 	def pull(self) -> uint8:
 		self.sp = (self.sp + 1) % 256
 		value = self.ram[0x100 + self.sp]
-		# self.instruction_logger.debug(f'Pulled ${value:02X}, sp={self.sp}')
+		if self.instruction_logger:
+			self.instruction_logger.debug(f'Pulled ${value:02X}, sp={self.sp}')
 		return value
 
 	def pull16(self) -> pointer16:
 		self.sp = (self.sp + 2) % 256
 		value = int.from_bytes(self.ram[0x100 + self.sp : 0x100 + self.sp + 2], byteorder='little')
-		# self.instruction_logger.debug(f'Pulled ${value:04X}, sp={self.sp}')
+		if self.instruction_logger:
+			self.instruction_logger.debug(f'Pulled ${value:04X}, sp={self.sp}')
 		return value
 
 	# Clock
