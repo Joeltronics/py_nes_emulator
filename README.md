@@ -19,7 +19,7 @@ It's still very early. It can emulate & partially render Balloon Fight (at least
 
 Very little yet. All documented CPU instructions are emulated (at least in theory - not all are tested), and there's basic PPU functionality. But rendering is still very basic, and there's no controller input, APU, or mapper support.
 
-Donkey Kong & Ice Climber both crash from hitting an invalid instruction immediately after an RTS call, so there seems to be a problem with one of the stack-related instructions.
+Donkey Kong & Ice Climber both crash from hitting an invalid instruction immediately after an RTI call, so there seems to be a problem with interrupt handling, or one of the stack-related instructions.
 
 PPU & rendering issues:
 

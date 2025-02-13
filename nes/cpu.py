@@ -12,6 +12,10 @@ from nes.types import uint8, int8, pointer16
 INSTRUCTION_LOG_FILE: Final = Path('instructions.log')
 
 
+LOG_REGISTERS = False
+LOG_STACK = False
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -257,29 +261,52 @@ class Cpu:
 		self._tick_clock(513)  # TODO: sometimes 514 cycles
 
 	# Stack
+	# (6502 uses push/pull terminology instead of push/pop)
 
-	def push(self, value: uint8) -> None:
+	def push(self, value: uint8, log=True) -> None:
 		self.ram[0x100 + self.sp] = value
 		self.sp = (self.sp - 1) % 256
-		if self.instruction_logger:
+		if log and self.instruction_logger:
 			self.instruction_logger.debug(f'Pushed ${value:02X}, sp={self.sp}')
 
 	def push16(self, value: pointer16) -> None:
-		self.ram[0x100 + self.sp : 0x100 + self.sp + 2] = value.to_bytes(2, byteorder='little')
-		self.sp = (self.sp - 2) % 256
+
+		# TODO optimization: try to optimize this as:
+		#   self.ram[0x100 + self.sp : 0x100 + self.sp + 2] = value.to_bytes(2, byteorder='little')
+		#   self.sp = (self.sp - 2) % 256
+		# But this doesn't work when sp == 255 (it doesn't wrap, and writes to 0x200)
+
+		high = (value & 0xFF00) >> 8
+		low = value & 0xFF
+
+		# Little-endian, so low bit is first in memory
+		# But stack moves downwards as we push, so push high byte first
+		self.push(high, log=False)
+		self.push(low, log=False)
+
 		if self.instruction_logger:
 			self.instruction_logger.debug(f'Pushed ${value:04X}, sp={self.sp}')
 
-	def pull(self) -> uint8:
+	def pull(self, log=True) -> uint8:
 		self.sp = (self.sp + 1) % 256
 		value = self.ram[0x100 + self.sp]
-		if self.instruction_logger:
+		if log and self.instruction_logger:
 			self.instruction_logger.debug(f'Pulled ${value:02X}, sp={self.sp}')
 		return value
 
 	def pull16(self) -> pointer16:
-		self.sp = (self.sp + 2) % 256
-		value = int.from_bytes(self.ram[0x100 + self.sp : 0x100 + self.sp + 2], byteorder='little')
+
+		# TODO optimization: try to optimize this as:
+		#   self.sp = (self.sp + 2) % 256
+		#   value = int.from_bytes(self.ram[0x100 + self.sp : 0x100 + self.sp + 2], byteorder='little')
+		# But this doesn't work when sp == 255 (it doesn't wrap, and reads from 0x200)
+
+		# Little-endian, so low bit is first in memory
+		# Stack moves upwards, so low byte is read first
+		low = self.pull(log=False)
+		high = self.pull(log=False)
+
+		value = 256 * high + low
 		if self.instruction_logger:
 			self.instruction_logger.debug(f'Pulled ${value:04X}, sp={self.sp}')
 		return value
@@ -970,8 +997,7 @@ class Cpu:
 			case 0x20:
 				# JSR
 				cycles = 6
-				# We've already incremented PC by 1, so add 1 instead of 2
-				self.push16(self.pc + 1)
+				self.push16(pc_was + 2)
 				self.pc = self.read16(self.pc)
 				instr_log = f'JSR ${self.pc:04X}'
 
@@ -1383,10 +1409,10 @@ class Cpu:
 				result = self.a = self.y
 
 			case 0x02 | 0x12 | 0x22 | 0x32 | 0x42 | 0x52 | 0x62 | 0x72 | 0x92 | 0xB2 | 0xD2 | 0xF2:
-				raise Exception(f'Invalid instruction (JAM): 0x{opcode:02X}')
+				raise Exception(f'Invalid instruction (JAM): 0x{opcode:02X} (at 0x{pc_was:04X})')
 
 			case _:
-				raise NotImplementedError(f'CPU instruction 0x{opcode:02X} not implemented')
+				raise NotImplementedError(f'CPU instruction 0x{opcode:02X} not implemented (at 0x{pc_was:04X})')
 
 		if result is not None:
 			self.z = (result == 0)
@@ -1405,20 +1431,20 @@ class Cpu:
 			if self._addr_instr_log:
 				instr_log += ' ' + self._addr_instr_log
 
-			if False:
-				msg = (
-					f't={clock_was:5}, pc=0x{pc_was:04X}, instr=0x{opcode:02X}, {indent + instr_log:48} '
-					f'a=0x{self.a:02X} x=0x{self.x:02X} y=0x{self.y:02X} sp={self.sp:3} {self.sr_str}'
-				)
-			else:
-				# msg = f'{clock_was:5}, pc=0x{pc_was:04X}, instr=0x{opcode:02X}, {indent + instr_log:48} {self.sr_str}'
-				msg = (
-					f'{self.ppu.frame_count}, ({self.ppu.row:3}, {self.ppu.col:3}); '
-					f'pc=0x{pc_was:04X}, instr=0x{opcode:02X}, {indent + instr_log:48} {self.sr_str}'
-				)
+			msg = (
+				f'{self.ppu.frame_count}, ({self.ppu.row:3}, {self.ppu.col:3}); '
+				f'pc=0x{pc_was:04X}, instr=0x{opcode:02X}, {indent + instr_log:48}'
+				f'{self.sr_str}'
+			)
 
-			if branched is not None:
-				msg += ' (branched)' if branched else ' (no branch)'
+			if LOG_REGISTERS:
+				msg += f' a=0x{self.a:02X} x=0x{self.x:02X} y=0x{self.y:02X} sp={self.sp:3}'
+
+			if LOG_STACK:
+				msg += self._get_stack_str()
+
+			# if branched is not None:
+			# 	msg += ' (branched)' if branched else ' (no branch)'
 
 			if result is not None:
 				msg += f' (result=0x{result:02X})'
@@ -1426,7 +1452,24 @@ class Cpu:
 			if sp != sp_was:
 				msg += f'; SP {sp_was} -> {sp}'
 
+			if not 1 <= (self.pc - pc_was) <= 3:
+				msg += f'; PC ${pc_was:04X} -> ${self.pc:04X}'
+
 			self.instruction_logger.debug(msg)
 
 		# TODO: technically, this should happen before result happens
 		self._tick_clock(cycles)
+
+		# if opcode == 0x60:
+		# 	print('DEBUG: exiting due to RTS')
+		# 	exit(1)
+
+	def _get_stack_str(self):
+		ret = ''
+
+		for idx in reversed(range(self.sp, 256)):
+			val = self.ram[0x100 + idx]
+			ret += f' {val:02X}'
+			# ret += f' {idx}={val:02X}'
+
+		return ret
