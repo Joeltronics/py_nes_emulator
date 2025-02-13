@@ -15,19 +15,28 @@ My main goal is to get this to the point where it can emulate Super Mario Bros -
 
 ### Current status
 
-Very little yet. All documented CPU instructions are emulated (at least in theory - not all are tested), and basic there's basic PPU functionality. But otherwise:
+It's still very early. It can emulate & partially render Balloon Fight (at least as far as the Attract Mode screen, since there's no controller input).
 
-- No graphics are being rendered at all yet
-- No controller input
-- No APU
+Very little yet. All documented CPU instructions are emulated (at least in theory - not all are tested), and there's basic PPU functionality. But rendering is still very basic, and there's no controller input, APU, or mapper support.
 
-Balloon Fight seems to run without crashing (though it's hard to tell if it's actually emulating properly without graphics). Donkey Kong & Ice Climber both crash from hitting an invalid instruction immediately after an RTS call, so there seems to be a problem with one of the stack-related instructions.
+Donkey Kong & Ice Climber both crash from hitting an invalid instruction immediately after an RTS call, so there seems to be a problem with one of the stack-related instructions.
+
+PPU & rendering issues:
+
+- Sprite 0 hit isn't implemented
+- Background priority isn't implemented
+- Right now we only render once at the start of VBLANK, so mid-frame updates won't work
+- We don't limit to max 8 sprites per line
+	- This might sound like a limit we don't want, but some games actually use this intentionally (like doors in The Legend of Zelda)
+- Scrolling is implemented, but not well tested since the only ROMs I'm testing don't use scrolling
 
 Next goals:
 
 - Fix the bug causing Donkey Kong & Ice Climber to crash
-- Basic graphics implementation
+- More PPU & graphics work
 - Emulate some simpler ROMS (Balloon Fight, Donkey Kong, Ice Climber)
+- Enable the simple optimization of not running the CPU while it's looping waiting for a PPUSTATUS update (this is partially implemented, but doesn't actually wait yet)
+- Code cleanups
 
 Future goals:
 

@@ -13,6 +13,7 @@ from utils import logging_utils
 def parse_args():
 	p = ArgumentParser()
 	p.add_argument('rom_path', type=Path)
+	p.add_argument('--headless', action='store_true')
 	p.add_argument('--stop', metavar='FRAMES', dest='stop_after_frames', type=int, default=0, help='Stop after this many frames')
 
 	p.set_defaults(verbosity=0)
@@ -39,14 +40,18 @@ def main():
 
 	nes = Nes(
 		rom,
-		stop_after_frames=args.stop_after_frames,
 		log_instructions_to_file=True,
 		log_instructions_to_stream=(args.verbosity >= 3),
+		render=(not args.headless),
 	)
 
-	print('Emulating...')
-	while True:
-		nes.cpu.process_instruction()
+	if args.stop_after_frames:
+		print(f'Emulating for {args.stop_after_frames} frames...')
+		for _ in range(args.stop_after_frames + 1):
+			nes.run_until_next_vblank_start()
+	else:
+		print('Emulating...')
+		nes.run()
 
 
 if __name__ == "__main__":

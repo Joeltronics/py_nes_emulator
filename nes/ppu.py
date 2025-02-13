@@ -5,6 +5,7 @@ from typing import Callable, Final
 
 from nes.rom import INesHeader
 from nes.types import uint8, pointer16
+from nes.renderer import Renderer
 
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,11 @@ NAMETABLE_LAYOUT_VERTICAL: Final[tuple[int, int, int, int]] = (
 
 
 class Ppu:
-	def __init__(self, rom_chr: bytes, rom_header: INesHeader, *, stop_after_frames: int = 0):
+	def __init__(
+			self,
+			rom_chr: bytes,
+			rom_header: INesHeader,
+			):
 
 		self.rom_chr: Final[bytes] = rom_chr
 
@@ -30,8 +35,7 @@ class Ppu:
 
 		self.vram: Final[bytearray] = bytearray(2048)
 		self.palette_ram: Final[bytearray] = bytearray(32)
-
-		self.stop_after_frames: int = stop_after_frames
+		self.oam: Final[bytearray] = bytearray(256)
 
 		self.frame_count: int = 0
 		self.row: int = 0
@@ -120,9 +124,6 @@ class Ppu:
 		else:
 			logger.debug(f'Frame {self.frame_count} VBLANK start (NMI disabled)')
 
-		if self.stop_after_frames and self.frame_count >= (self.stop_after_frames - 1):
-			raise StopIteration(f'Hit {self.stop_after_frames} frames')
-
 		if self.vblank_start_callback:
 			self.vblank_start_callback()
 
@@ -210,6 +211,10 @@ class Ppu:
 				raise NotImplementedError(f'TODO: support writing PPU register ${addr:04X}')
 
 	def nametable_vram_addr(self, addr: pointer16) -> int:
+
+		if self.ppuctrl & 0x03:
+			raise NotImplementedError('Base nametable address is not yet supported')
+
 		nametable_idx, addr_low = divmod(addr & 0x0FFF, 0x400)
 		return addr_low + self.nametable_layout[nametable_idx]
 
@@ -257,4 +262,6 @@ class Ppu:
 		"""
 		Start an OAM DMA
 		"""
-		pass  # TODO
+		# TODO: do this step by step instead of all at once, like a real NES
+		assert len(data) == len(self.oam)
+		self.oam[:] = data
