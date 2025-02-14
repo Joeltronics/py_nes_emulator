@@ -11,6 +11,12 @@ from nes.renderer import Renderer
 logger = logging.getLogger(__name__)
 
 
+COLUMNS: Final[int] = 340
+
+VBLANK_START_ROW: Final[int] = 240
+VBLANK_END_ROW: Final[int] = 260
+TOTAL_ROWS: Final[int] = 262
+
 NAMETABLE_A_VRAM_START: Final[pointer16] = 0x000
 NAMETABLE_B_VRAM_START: Final[pointer16] = 0x400
 
@@ -85,10 +91,10 @@ class Ppu:
 
 	def _tick_clock(self, cycles: int) -> None:
 		self.col += cycles
-		while self.col > 340:
-			self.col -= 340
+		while self.col > COLUMNS:
+			self.col -= COLUMNS
 			self._finish_row(self.row)
-			self.row = (self.row + 1) % 262
+			self.row = (self.row + 1) % TOTAL_ROWS
 
 			if self.row == 0:
 				self.frame_count += 1
@@ -103,17 +109,24 @@ class Ppu:
 		if row_num < 240:
 			pass  # TODO: render row
 
-		elif row_num == 240:
+		elif row_num == VBLANK_START_ROW:
 			# TODO accuracy: technically this occurs 1 PPU clock later
 			self._vblank_start()
 
-		elif row_num == 260:
+		elif row_num == VBLANK_END_ROW:
 			# TODO accuracy: technically this occurs 1 PPU clock later
 			self._vblank_end()
 
-	def wait_for_ppustatus_change(self) -> None:
-		pass  # TODO: tick clock until next PPUSTATUS change
-		# raise NotImplementedError('TODO: wait_for_ppustatus_change()')
+	def tick_until_ppustatus_change(self) -> None:
+		logger.debug('Waiting for next PPUSTATUS change')
+		# Tick clock until next PPUSTATUS change
+		ppustatus = self.ppustatus
+		# TODO optimization: Instead of ticking 1 row, calculate when the next PPUSTATUS change will happen and
+		# jump straight there (although with the way tick_clock works right now, this might not be that much of an
+		# optimization)
+		while self.ppustatus == ppustatus:
+			# Tick ahead 1 row
+			self._tick_clock(COLUMNS)
 
 	def _vblank_start(self):
 		# Set vblank

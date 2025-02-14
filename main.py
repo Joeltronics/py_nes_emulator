@@ -16,6 +16,8 @@ def parse_args():
 	p.add_argument('--headless', action='store_true')
 	p.add_argument('--stop', metavar='FRAMES', dest='stop_after_frames', type=int, default=0, help='Stop after this many frames')
 
+	p.add_argument('--no-cpu-sleep', action='store_false', dest='sleep_cpu', help='Do not sleep CPU waiting for PPU to change')
+
 	p.set_defaults(verbosity=0)
 	mx = p.add_mutually_exclusive_group()
 	mx.add_argument('-v', action='store_const', dest='verbosity', const=1, help='Verbose')
@@ -40,6 +42,7 @@ def main():
 
 	nes = Nes(
 		rom,
+		sleep_cpu=args.sleep_cpu,
 		log_instructions_to_file=True,
 		log_instructions_to_stream=(args.verbosity >= 3),
 		render=(not args.headless),

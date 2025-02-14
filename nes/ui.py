@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 
-import numpy as np
+import logging
 import pygame
 
 from nes.renderer import Renderer
 from nes.graphics_utils import array_to_surface, upscale
+
+
+logger = logging.getLogger(__name__)
 
 
 class Ui:
@@ -48,5 +51,5 @@ class Ui:
 	def handle_events(self):
 		for event in pygame.event.get():
 			if event.type == pygame.QUIT:
+				logger.info('Received pygame.QUIT event')
 				self.running = False
-				# sys.exit(0)

@@ -35,7 +35,6 @@ Next goals:
 - Fix the bug causing Donkey Kong & Ice Climber to crash
 - More PPU & graphics work
 - Emulate some simpler ROMS (Balloon Fight, Donkey Kong, Ice Climber)
-- Enable the simple optimization of not running the CPU while it's looping waiting for a PPUSTATUS update (this is partially implemented, but doesn't actually wait yet)
 - Code cleanups
 
 Future goals:

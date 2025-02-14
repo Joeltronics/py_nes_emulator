@@ -70,13 +70,13 @@ for sval in [0, 1, 2, -1, -2, 126, 127, -128, -127]:
 	assert _signed(_unsigned(sval)) == sval
 
 
-
 class Cpu:
 	def __init__(
 			self, *,
 			rom_prg: bytes,
 			ppu: Ppu,
 			apu: Apu,
+			sleep_on_branch_loop: bool = False,
 			stop_on_brk: bool = False,
 			log_instructions_to_file: bool = False,
 			log_instructions_to_stream: bool = False,
@@ -119,10 +119,9 @@ class Cpu:
 		# TODO: use a weakref (this leads to circular reference, not sure if Python gc can handle it properly)
 		ppu.vblank_start_callback = self.vblank_start_callback
 
-		# Detect repeated reads to $2002
-		# TODO: smarter, more general purpose "PPU read loop" detector
-		self.read_ppustatus_counter: uint8 = 0
-		self.last_ppustatus: uint8 = 0
+		# Detect branch loops which are may be waiting for NMI, or otherwise for PPUSTATUS to change
+		self.sleep_on_branch_loop = sleep_on_branch_loop
+		self.branch_loop_cache = None
 
 		self.instruction_logger = make_instruction_logger(
 			to_file=log_instructions_to_file,
@@ -170,6 +169,24 @@ class Cpu:
 			('C' if self.c else '-')
 		)
 
+	# Branch loop cache
+
+	def on_branch_check_loop(self):
+
+		# Optimization: if repeatedly branching and no CPU status has changed (branch_loop_cache also gets cleared on
+		# any memory write), then we must be in a loop waiting for change from PPU, so we can skip emulating the CPU
+		# and just tick the PPU forward
+		# TODO: mappers that support interrupts will change this assumption
+
+		branch_loop_cache_new = (self.pc, self.a, self.x, self.y, self.sp, self.sr)
+
+		if branch_loop_cache_new == self.branch_loop_cache:
+			if self.instruction_logger:
+				self.instruction_logger.debug('Sleeping until PPUSTATUS changes')
+			self.ppu.tick_until_ppustatus_change()
+
+		self.branch_loop_cache = branch_loop_cache_new
+
 	# Read & write memory
 
 	def read(self, addr: pointer16) -> uint8:
@@ -183,19 +200,7 @@ class Cpu:
 		elif addr < 0x4000:
 			# PPU
 			wrapped_addr = 0x2000 + (addr & 0x07)
-			value = self.ppu.read_reg_from_cpu(wrapped_addr)
-			if wrapped_addr == 0x2002:
-				# TODO: move PPUSTATUS detector into its own class
-				if value == self.last_ppustatus:
-					self.read_ppustatus_counter += 8
-					if self.read_ppustatus_counter >= 16:
-						if self.instruction_logger:
-							self.instruction_logger.debug('Detected repeated PPUSTATUS reads, waiting for it to change')
-						self.ppu.wait_for_ppustatus_change()
-				else:
-					self.read_ppustatus_counter = 0
-					self.last_ppustatus = value
-			return value
+			return self.ppu.read_reg_from_cpu(wrapped_addr)
 
 		elif addr < 0x4020:
 			# APU
@@ -219,6 +224,8 @@ class Cpu:
 	def write(self, addr: pointer16, val: uint8) -> None:
 
 		assert 0 <= addr < 65536, f'Invalid address: {addr}'
+
+		self.branch_loop_cache = None
 
 		if addr == 0x4014:
 			# OAMDMA
@@ -525,8 +532,6 @@ class Cpu:
 	# Main process function
 
 	def process_instruction(self) -> None:
-
-		self.read_ppustatus_counter = max(0, self.read_ppustatus_counter - 1)
 
 		if self.vblank_needs_handling:
 			self._handle_vblank()
@@ -1418,11 +1423,16 @@ class Cpu:
 			self.z = (result == 0)
 			self.n = bool(result & 0b1000_0000)
 
+		if self.sleep_on_branch_loop and branched is not None:
+			if branched:
+				self.on_branch_check_loop()
+			else:
+				# Clear branch_loop_cache on any not-taken branch, just to be safe (not sure if this is really necessary?)
+				self.branch_loop_cache = None
+
 		if self.instruction_logger:
 
-			# TODO: is it better to auto indent based on stack pointer, or manual inc/dec based on interrupts/JSR/RTI/RTS
-			# num_indent = (255 - sp_was) if (sp_was > 0) else 0
-			# num_indent = (255 - sp_was) % 32
+			# TODO: is it better to auto indent based on stack pointer, or manual inc/dec based on interrupts/JSR/RTI/RTS?
 			num_indent = (256 - sp_was) % 32
 
 			indent = ' ' * num_indent

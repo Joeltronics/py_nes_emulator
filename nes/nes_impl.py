@@ -13,6 +13,7 @@ class Nes:
 			self,
 			rom: Rom,
 			*,
+			sleep_cpu: bool = True,
 			log_instructions_to_file: bool = False,
 			log_instructions_to_stream: bool = False,
 			render: bool = True,
@@ -41,11 +42,14 @@ class Nes:
 			rom_prg=self.rom.prg,
 			apu=self.apu,
 			ppu=self.ppu,
+			sleep_on_branch_loop=sleep_cpu,
 			log_instructions_to_file=log_instructions_to_file,
 			log_instructions_to_stream=log_instructions_to_stream,
 		)
 
 	def run(self):
+
+		# TODO: log FPS (and how much time was emulation vs rendering vs UI)
 
 		if self.ui:
 			assert self.renderer
