@@ -28,6 +28,13 @@ def array_to_surface(arr: np.ndarray, upscale: int = 1):
 	return pygame.surfarray.make_surface(arr.swapaxes(1,0))
 
 
+def draw_rectangle(arr: np.ndarray, color, x, y, w, h) -> None:
+	arr[y        , x : x + w - 1, ...] = color
+	arr[y + h - 1, x : x + w - 1, ...] = color
+	arr[y : y + h - 1, x        , ...] = color
+	arr[y : y + h - 1, x + w - 1, ...] = color
+
+
 def chr_to_array(rom_chr: bytes, width=16) -> np.ndarray:
 	"""
 	:returns: CHR as array (2-bit), shape (512/width*8, width*8)
