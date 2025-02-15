@@ -3,6 +3,9 @@
 import logging
 from typing import Callable, Final
 
+import numpy as np
+
+from nes.graphics_utils import chr_to_array, chr_to_stacked, grey_to_rgb, load_palette_file, upscale, draw_rectangle
 from nes.rom import INesHeader
 from nes.types import uint8, pointer16
 from nes.renderer import Renderer
@@ -25,6 +28,8 @@ NAMETABLE_LAYOUT_HORIZONTAL: Final[tuple[int, int, int, int]] = (
 NAMETABLE_LAYOUT_VERTICAL: Final[tuple[int, int, int, int]] = (
 	NAMETABLE_A_VRAM_START, NAMETABLE_B_VRAM_START, NAMETABLE_A_VRAM_START, NAMETABLE_B_VRAM_START)
 
+SPRITE_ZERO_HIT_NONE: Final[tuple[int, int]] = (TOTAL_ROWS + 1, COLUMNS)
+
 
 class Ppu:
 	def __init__(
@@ -34,6 +39,8 @@ class Ppu:
 			):
 
 		self.rom_chr: Final[bytes] = rom_chr
+
+		self._chr_tiles_mask = chr_to_stacked(self.rom_chr) > 0
 
 		self.nametable_layout: Final[tuple[int, int, int, int]] = (
 			NAMETABLE_LAYOUT_VERTICAL if rom_header.vertical_mirroring else NAMETABLE_LAYOUT_HORIZONTAL
@@ -60,6 +67,8 @@ class Ppu:
 		self.write_latch: bool = False
 
 		self.nmi: bool = False
+
+		self.sprite_zero_hit_loc: tuple[int, int] = SPRITE_ZERO_HIT_NONE
 
 		self.odd_frame: bool = False
 
@@ -105,10 +114,13 @@ class Ppu:
 
 	def _finish_row(self, row_num: int) -> None:
 
-		assert row_num <= 261
+		assert row_num < TOTAL_ROWS
 
 		if row_num < 240:
-			pass  # TODO: render row
+			# TODO accuracy: fire this as soon as we hit the relevant pixel, not at the end of the row
+			if self.sprite_zero_hit_loc[0] == row_num:
+				logger.debug(f'Sprite zero hit on row {row_num}')
+				self.ppustatus |= 0b0100_0000
 
 		elif row_num == VBLANK_START_ROW:
 			# TODO accuracy: technically this occurs 1 PPU clock later
@@ -118,12 +130,52 @@ class Ppu:
 			# TODO accuracy: technically this occurs 1 PPU clock later
 			self._vblank_end()
 
+	def _calculate_sprite_zero_hit(self) -> tuple[int, int]:
+		"""
+		Calculate pixel where sprite zero hit flag should get set, based on current data
+		:returns: (y, x); if sprite zero never gets hit, then returns out of bounds coordinate (SPRITE_ZERO_HIT_NONE)
+		"""
+
+		ppumask = self.ppumask
+
+		# If sprite or BG rendering is disabled, we do not hit
+		if (ppumask & 0b0001_1000) != 0b0001_1000:
+			return SPRITE_ZERO_HIT_NONE
+
+		sprite_y = self.oam[0] + 1
+		if sprite_y >= 240:
+			return SPRITE_ZERO_HIT_NONE
+
+		sprite_tile_idx = self.oam[1]
+		sprite_flags = self.oam[2]
+		sprite_x = self.oam[3]
+
+		tile = self._chr_tiles_mask[sprite_tile_idx]
+
+		if sprite_flags & 0b1000_0000:
+			tile = np.flipud(tile)
+
+		if sprite_flags & 0b0100_0000:
+			tile = np.fliplr(tile)
+
+		# TODO: load background tiles around this area, np.logical_and() these two together
+		# scroll_x = self.scroll_x
+		# scroll_y = self.scroll_y
+
+		# Find first non-zero pixel
+
+		if not tile.any():
+			return SPRITE_ZERO_HIT_NONE
+
+		zero_hit_y, zero_hit_x = np.unravel_index(np.argmax(tile), tile.shape)
+		return (zero_hit_y, zero_hit_x)
+
 	def tick_until_ppustatus_change(self) -> None:
 		logger.debug('Waiting for next PPUSTATUS change')
 		# Tick clock until next PPUSTATUS change
 		ppustatus = self.ppustatus
-		# TODO optimization: Instead of ticking 1 row, calculate when the next PPUSTATUS change will happen and
-		# jump straight there (although with the way tick_clock works right now, this might not be that much of an
+		# TODO optimization: Instead of ticking 1 row at a time, calculate when the next PPUSTATUS change will happen
+		# and jump straight there (although with the way tick_clock works right now, this might not be that much of an
 		# optimization)
 		while self.ppustatus == ppustatus:
 			# Tick ahead 1 row
@@ -150,6 +202,7 @@ class Ppu:
 		if self.vblank_end_callback:
 			self.vblank_end_callback()
 
+		self.sprite_zero_hit_loc = self._calculate_sprite_zero_hit()
 
 	def read_reg_from_cpu(self, addr: pointer16) -> uint8:
 		"""
@@ -181,36 +234,48 @@ class Ppu:
 		Write register in the range 0x2000-0x2007
 		"""
 
+		# https://forums.nesdev.org/viewtopic.php?t=7890
+		rendering = (not self.vblank) and (self.ppumask & 0b0001_1000)
+
 		match addr:
 			case 0x2000:
 				# PPUCTRL
+				# Can be modified while rendering
 				logger.debug(f'Setting PPUCTRL=0x{value:02X}')
 				self.ppuctrl = value
 			case 0x2001:
 				# PPUMASK
+				# Can be modified while rendering
 				logger.debug(f'Setting PPUMASK=0x{value:02X}')
 				self.ppumask = value
 			case 0x2003:
 				# OAMADDR
+				# Should not be modified while rendering
+				if rendering:
+					raise NotImplementedError('Behavior of writing OAMADDR while rendering is not implemented')
 				self.oamaddr = value
 			case 0x2004:
 				# OAMDATA
+				# Should not be modified while rendering
 				raise NotImplementedError('Manually writing OAMDATA is not yet supported')
 
 			case 0x2005:
 				# PPUSCROLL
+				# Can be modified while rendering
 				if not self.write_latch:
 					# 1st write: X
 					logger.debug(f'Setting PPUSCROLL X={value}')
 					self.scroll_x = value
 				else:
 					# 2nd write: Y
+					# TODO: if rendering, do not apply until write to 2006
 					logger.debug(f'Setting PPUSCROLL Y={value}')
 					self.scroll_y = value
 				self.write_latch = not self.write_latch
 
 			case 0x2006:
 				# PPUADDR
+				# TODO: behavior while rendering
 				if not self.write_latch:
 					# 1st write: MSB
 					self.ppuaddr = ((value & 0x3F) << 8) | (self.ppuaddr & 0x00FF)
@@ -222,11 +287,18 @@ class Ppu:
 
 			case 0x2007:
 				# PPUDATA
+				# Should not be modified while rendering
+				if rendering:
+					raise NotImplementedError('Behavior of writing PPUDATA while rendering is not implemented')
 				self.write(self.ppuaddr, value)
 				self.ppuaddr += self.ppuaddr_increment
 
 			case _:
 				raise NotImplementedError(f'TODO: support writing PPU register ${addr:04X}')
+
+		if rendering and (not self.sprite_zero_hit):
+			# If updating oustide VBLANK, update sprite zero location
+			self.sprite_zero_hit_loc = self._calculate_sprite_zero_hit()
 
 	def nametable_vram_addr(self, addr: pointer16) -> int:
 
@@ -281,5 +353,7 @@ class Ppu:
 		Start an OAM DMA
 		"""
 		# TODO: do this step by step instead of all at once, like a real NES
+		# TODO: not sure of behavior if called outside of VBLANK
+		# If it's allowed, update self.sprite_zero_hit_loc
 		assert len(data) == len(self.oam)
 		self.oam[:] = data

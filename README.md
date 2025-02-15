@@ -23,12 +23,17 @@ Donkey Kong, Ice Climber, and Super Mario Bros all crash from hitting an invalid
 
 PPU & rendering issues:
 
-- Sprite 0 hit isn't implemented
+- Sprite 0 hit is only partially implemented:
+	- It works if you assume no background pixels are transparent
+	- It does not factor in some of the weird quirks
+	- It's only line-accurate, not cycle-accurate
 - Background priority isn't implemented
 - Right now we only render once at the start of VBLANK, so mid-frame updates won't work
 - We don't limit to max 8 sprites per line
 	- This might sound like a limit we don't want, but some games actually use this intentionally (like doors in The Legend of Zelda)
+	- Sprite overflow flag is not set either (which some games might depend on)
 - Scrolling is implemented, but not well tested since the only ROMs I'm testing don't use scrolling
+- Exact behavior of updating PPU outside of VBLANK is not fully emulated
 
 Next goals:
 
