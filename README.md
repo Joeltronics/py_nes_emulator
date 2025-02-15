@@ -17,9 +17,9 @@ My main goal is to get this to the point where it can emulate Super Mario Bros -
 
 It's still very early. It can emulate & partially render Balloon Fight (at least as far as the Attract Mode screen, since there's no controller input).
 
-Very little yet. All documented CPU instructions are emulated (at least in theory - not all are tested), and there's basic PPU functionality. But rendering is still very basic, and there's no controller input, APU, or mapper support.
+All documented CPU instructions are emulated (at least in theory - not all are tested), and there's basic PPU functionality. But rendering is still very basic, and there's no controller input, APU, or mapper support.
 
-Donkey Kong & Ice Climber both crash from hitting an invalid instruction immediately after an RTI call, so there seems to be a problem with interrupt handling, or one of the stack-related instructions.
+Donkey Kong, Ice Climber, and Super Mario Bros all crash from hitting an invalid instruction immediately after an RTI call, so there seems to be a problem with interrupt handling, or one of the stack-related instructions.
 
 PPU & rendering issues:
 

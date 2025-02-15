@@ -13,6 +13,7 @@ class Nes:
 			self,
 			rom: Rom,
 			*,
+			breakpoints: bool = False,
 			sleep_cpu: bool = True,
 			log_instructions_to_file: bool = False,
 			log_instructions_to_stream: bool = False,
@@ -45,7 +46,27 @@ class Nes:
 			sleep_on_branch_loop=sleep_cpu,
 			log_instructions_to_file=log_instructions_to_file,
 			log_instructions_to_stream=log_instructions_to_stream,
+			stop_on_brk=breakpoints,
+			stop_on_rti=breakpoints,
+			stop_on_vblank_start=breakpoints,
+			stop_on_vblank_end=breakpoints,
 		)
+
+	def _handle_breakpoint(self):
+
+		print('Breakpoint')
+
+		while True:
+			if self.ui:
+				self.ui.handle_events()
+			val = input('Enter to step, or "c" to continue: ').strip().lower()
+
+			if not val:
+				# Step
+				self.cpu.process_instruction()
+				continue
+			elif val.startswith('c'):
+				return
 
 	def run(self):
 
@@ -66,13 +87,15 @@ class Nes:
 		else:
 
 			while True:
-				self.cpu.process_instruction()
-
+				if self.cpu.process_instruction():
+					self._handle_breakpoint()
 
 	def run_until_next_vblank_start(self):
 
 		while self.ppu.vblank:
-			self.cpu.process_instruction()
+			if self.cpu.process_instruction():
+				self._handle_breakpoint()
 
 		while not self.ppu.vblank:
-			self.cpu.process_instruction()
+			if self.cpu.process_instruction():
+				self._handle_breakpoint()

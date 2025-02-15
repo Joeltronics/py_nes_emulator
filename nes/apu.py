@@ -14,4 +14,10 @@ class Apu:
 		"""
 		Write register in the range 0x4000-0x401F
 		"""
+
+		if addr == 0x4017:
+			irq_inhibit = bool(val & 0b0100_0000)
+			if not irq_inhibit:
+				raise NotImplementedError('APU IRQ is not yet supported')
+
 		pass  # TODO

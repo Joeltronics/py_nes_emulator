@@ -76,8 +76,14 @@ class Cpu:
 			rom_prg: bytes,
 			ppu: Ppu,
 			apu: Apu,
+
 			sleep_on_branch_loop: bool = False,
+
+			stop_on_vblank_start: bool = False,
+			stop_on_vblank_end: bool = False,
 			stop_on_brk: bool = False,
+			stop_on_rti: bool = False,
+
 			log_instructions_to_file: bool = False,
 			log_instructions_to_stream: bool = False,
 			):
@@ -85,7 +91,11 @@ class Cpu:
 		self.rom_prg: Final[bytes] = rom_prg
 		self.ppu: Final[Ppu] = ppu
 		self.apu: Final[Apu] = apu
+
+		self.stop_on_vblank_start: bool = stop_on_vblank_start
+		self.stop_on_vblank_end: bool = stop_on_vblank_end
 		self.stop_on_brk: bool = stop_on_brk
+		self.stop_on_rti: bool = stop_on_rti
 
 		self.ram: Final[bytearray] = bytearray(2048)
 
@@ -100,24 +110,25 @@ class Cpu:
 		logging.debug(f'IRQ: 0x{self.irq:04X}')
 
 		# CPU state
-		self.sp: uint8 = 0xFD
 		self.pc: pointer16 = self.reset
+		self.sp: uint8 = 0xFD
 		self.a: uint8 = 0
 		self.x: uint8 = 0
 		self.y: uint8 = 0
 
 		self.n: bool = False
 		self.v: bool = False
-		self.b: bool = False
 		self.d: bool = False
 		self.i: bool = True
 		self.z: bool = False
 		self.c: bool = False
 
 		self.vblank_needs_handling: bool = False
+		self.vblank_end_needs_handling: bool = False
 
 		# TODO: use a weakref (this leads to circular reference, not sure if Python gc can handle it properly)
 		ppu.vblank_start_callback = self.vblank_start_callback
+		ppu.vblank_end_callback = self.vblank_end_callback
 
 		# Detect branch loops which are may be waiting for NMI, or otherwise for PPUSTATUS to change
 		self.sleep_on_branch_loop = sleep_on_branch_loop
@@ -139,7 +150,7 @@ class Cpu:
 		return (
 			int(self.n) << 7 |
 			int(self.v) << 6 |
-			int(self.b) << 4 |
+			0b0010_0000 |  # This bit always set
 			int(self.d) << 3 |
 			int(self.i) << 2 |
 			int(self.z) << 1 |
@@ -150,19 +161,15 @@ class Cpu:
 	def sr(self, sr: uint8) -> None:
 		self.n = bool(sr & 0b1000_0000)
 		self.v = bool(sr & 0b0100_0000)
-		self.b = bool(sr & 0b0001_0000)
 		self.d = bool(sr & 0b0000_1000)
 		self.i = bool(sr & 0b0000_0100)
 		self.z = bool(sr & 0b0000_0010)
 		self.c = bool(sr & 0b0000_0001)
 
-	@property
 	def sr_str(self) -> str:
 		return (
 			('N' if self.n else '-') +
 			('V' if self.v else '-') +
-			'-' +
-			('B' if self.b else '-') +
 			('D' if self.d else '-') +
 			('I' if self.i else '-') +
 			('Z' if self.z else '-') +
@@ -178,7 +185,10 @@ class Cpu:
 		# and just tick the PPU forward
 		# TODO: mappers that support interrupts will change this assumption
 
-		branch_loop_cache_new = (self.pc, self.a, self.x, self.y, self.sp, self.sr)
+		branch_loop_cache_new = (
+			self.pc, self.sp, self.a, self.x, self.y,
+			self.n, self.v, self.d, self.i, self.z, self.c,
+		)
 
 		if branch_loop_cache_new == self.branch_loop_cache:
 			if self.instruction_logger:
@@ -211,12 +221,9 @@ class Cpu:
 			return 0
 
 		else:
-			# return self.rom_prg[(addr - 0x8000)]
-			# return self.rom_prg[(addr - 0x8000) % len(self.rom_prg)]
-			return self.rom_prg[addr % len(self.rom_prg)]
+			return self.rom_prg[(addr - 0x8000) % len(self.rom_prg)]
 
 	def read16(self, addr: pointer16) -> uint8:
-		# TODO optimization
 		low = self.read(addr)
 		high = self.read(addr + 1)
 		return (high << 8) + low
@@ -244,11 +251,6 @@ class Cpu:
 			self.apu.write_reg_from_cpu(addr, val)
 
 		# TODO: support mappers
-
-	# def write16(self, addr: pointer16, value: uint8) -> None:
-	# 	# TODO: optimize this
-	# 	self.write(addr, value & 0xFF)
-	# 	self.write(addr + 1, (value & 0xFF00) >> 8)
 
 	# DMA
 
@@ -514,27 +516,43 @@ class Cpu:
 	def vblank_start_callback(self) -> None:
 		self.vblank_needs_handling = True
 
+	def vblank_end_callback(self) -> None:
+		self.vblank_end_needs_handling = True
+
 	def _handle_vblank(self) -> None:
-		self.vblank_needs_handling = False
 		self.clock = 0
 		self.vblank_count += 1
 		if self.ppu.nmi:
 			self._handle_nmi()
 
 	def _handle_nmi(self) -> None:
+		# https://www.nesdev.org/wiki/CPU_interrupts#IRQ_and_NMI_tick-by-tick_execution
 		self.push16(self.pc + 2)
-		self.push(self.sr)
-		self.b = True
+		self.push(self.sr & 0b1110_1111)
 		self.pc = self.nmi
-		# TODO: is 7 ticks accurate? (I'm assuming it's same as BRK instruction)
+		self.i = True
 		self._tick_clock(7)
 
 	# Main process function
 
-	def process_instruction(self) -> None:
+	def process_instruction(self) -> bool:
+		"""
+		:returns: True if hit a breakpoint
+		"""
 
 		if self.vblank_needs_handling:
+			self.vblank_needs_handling = False
 			self._handle_vblank()
+			if self.stop_on_vblank_start:
+				return True
+
+		if self.vblank_end_needs_handling:
+			# TODO: check breakpoint
+			self.vblank_end_needs_handling = False
+			if self.stop_on_vblank_end:
+				return True
+
+		hit_breakpoint = False
 
 		clock_was = self.clock
 		pc_was = self.pc
@@ -766,12 +784,12 @@ class Cpu:
 				instr_log = 'BRK'
 				cycles = 7
 				# Was already incremented once
-				self.push16(self.pc + 1)
-				self.push(self.sr)
 				self.b = True
+				self.push16(self.pc + 1)
+				self.push(self.sr | 0b0011_0000)
+				self.i = True
 				self.pc = self.irq
-				if self.stop_on_brk:
-					raise StopIteration('Hit BRK instruction')
+				hit_breakpoint = self.stop_on_brk
 
 			case 0x50:
 				# BVC
@@ -1170,7 +1188,7 @@ class Cpu:
 				# PHP
 				instr_log = 'PHP'
 				cycles = 3
-				self.push(self.sr)
+				self.push(self.sr | 0b0011_0000)
 
 			case 0x68:
 				# PLA
@@ -1250,6 +1268,7 @@ class Cpu:
 				cycles = 6
 				self.sr = self.pull()
 				self.pc = self.pull16()
+				hit_breakpoint = self.stop_on_rti
 
 			case 0x60:
 				# RTS
@@ -1423,12 +1442,17 @@ class Cpu:
 			self.z = (result == 0)
 			self.n = bool(result & 0b1000_0000)
 
-		if self.sleep_on_branch_loop and branched is not None:
-			if branched:
+		if self.sleep_on_branch_loop:
+			if branched is not None:
+				if branched:
+					self.on_branch_check_loop()
+				else:
+					# Clear branch_loop_cache on any not-taken branch, just to be safe (not sure if this is really necessary?)
+					self.branch_loop_cache = None
+			elif self.pc == pc_was:
+				# e.g. "EndlessLoop: jmp EndlessLoop" as in Super Mario Bros
+				# TODO: this might be overkill, we might be able to skip the cache and jump straight to tick_until_ppustatus_change()
 				self.on_branch_check_loop()
-			else:
-				# Clear branch_loop_cache on any not-taken branch, just to be safe (not sure if this is really necessary?)
-				self.branch_loop_cache = None
 
 		if self.instruction_logger:
 
@@ -1444,7 +1468,7 @@ class Cpu:
 			msg = (
 				f'{self.ppu.frame_count}, ({self.ppu.row:3}, {self.ppu.col:3}); '
 				f'pc=0x{pc_was:04X}, instr=0x{opcode:02X}, {indent + instr_log:48}'
-				f'{self.sr_str}'
+				f'{self.sr_str()}'
 			)
 
 			if LOG_REGISTERS:
@@ -1470,9 +1494,7 @@ class Cpu:
 		# TODO: technically, this should happen before result happens
 		self._tick_clock(cycles)
 
-		# if opcode == 0x60:
-		# 	print('DEBUG: exiting due to RTS')
-		# 	exit(1)
+		return hit_breakpoint
 
 	def _get_stack_str(self):
 		ret = ''

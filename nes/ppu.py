@@ -64,6 +64,7 @@ class Ppu:
 		self.odd_frame: bool = False
 
 		self.vblank_start_callback: Callable[[], None] | None = None
+		self.vblank_end_callback: Callable[[], None] | None = None
 
 	@property
 	def vblank_nmi_enable(self) -> bool:
@@ -145,6 +146,10 @@ class Ppu:
 		logger.debug('VBLANK end')
 		self.ppustatus = 0
 		self.nmi = False
+
+		if self.vblank_end_callback:
+			self.vblank_end_callback()
+
 
 	def read_reg_from_cpu(self, addr: pointer16) -> uint8:
 		"""
