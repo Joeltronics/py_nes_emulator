@@ -527,7 +527,7 @@ class Cpu:
 
 	def _handle_nmi(self) -> None:
 		# https://www.nesdev.org/wiki/CPU_interrupts#IRQ_and_NMI_tick-by-tick_execution
-		self.push16(self.pc + 2)
+		self.push16(self.pc)
 		self.push(self.sr & 0b1110_1111)
 		self.pc = self.nmi
 		self.i = True
