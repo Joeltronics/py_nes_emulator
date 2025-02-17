@@ -174,6 +174,9 @@ class Ppu:
 		logger.debug('Waiting for next PPUSTATUS change')
 		# Tick clock until next PPUSTATUS change
 		ppustatus = self.ppustatus
+
+		# TODO: store which rows we've skipped, to display for debugging
+
 		# TODO optimization: Instead of ticking 1 row at a time, calculate when the next PPUSTATUS change will happen
 		# and jump straight there (although with the way tick_clock works right now, this might not be that much of an
 		# optimization)
@@ -236,6 +239,10 @@ class Ppu:
 
 		# https://forums.nesdev.org/viewtopic.php?t=7890
 		rendering = (not self.vblank) and (self.ppumask & 0b0001_1000)
+
+		# FIXME: PPUSCROLL & PPUADDR share an internal register (as well as 2 bits of PPUCTRL)
+		# https://www.nesdev.org/wiki/PPU_scrolling
+		# It also sounds like vertical scroll gets delayed until next frame, except with hacks via 0x2006
 
 		match addr:
 			case 0x2000:

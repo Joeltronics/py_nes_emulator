@@ -1,13 +1,13 @@
 # py_nes_emulator
 NES emulator written in Python
 
-This is just a toy example to learn about emulator development - optimization isn't really the goal, so I don't expect this Python version will ever be performant enough to actually play games in real-time (though I may eventually port this to C, C++, or Rust).
+This is just a toy example to learn about emulator development - optimization isn't really the goal, so I don't know if this Python version will ever be performant enough to actually play games in real-time (though I may eventually port this to C, C++, or Rust).
 
 My main goal is to get this to the point where it can emulate Super Mario Bros - and with it, most mapper 0 games. Though not necessarily in real time (see next section...)
 
 ### Probably Out of scope
 
-**Being optimized enough to actually play games in real-time.** That's not to say there won't be any optimization (for example, I'm interested in trying to do some of the PPU emulation on GPU), but Python really isn't intended for emulating a few million CPU & PPU instructions per second. Not to say it isn't possible - but it would need aggressively optimized code, at the expense of readability, maintainability, and "pythonic"-ness.
+**Being optimized enough to actually play games in real-time.** Performance is better than I expected it would be, and I'm able to emulate games at 20-30 FPS. But still, this is Python - it's not really intended for emulating a few million CPU & PPU instructions per second. It would probably possible with some aggressive optimization, but at the expense of readability, maintainability, and "pythonic"-ness.
 
 **Perfect emulation.** For example, precise cycle accuracy, hardware quirks like open-bus behavior, or pixel-exact PPU emulation. I do expect to support some of the most common quirks that many games rely on, but definitely not Battletoads-level accuracy.
 
@@ -15,10 +15,11 @@ My main goal is to get this to the point where it can emulate Super Mario Bros -
 
 ### Current status
 
-Emulation is basic. Ballon Fight seems to work; Donkey Kong seems to work, although the title screen doesn't seem to accept controller inputs properly. Ice Climber crashes early due to an unsupported PPU feature. The Super Mario Bros title screen doesn't work. There's also no APU or mapper support.
+There's basic emulation. Balloon Fight & Donkey Kong seem to work. Ice Climber crashes early due to an unsupported PPU feature. The Super Mario Bros title screen doesn't work, likely due to something I'm not doing right with the PPU (see below). There's also no APU or mapper support.
 
 PPU & rendering issues:
 
+- PPUSCROLL & PPUADDR sharing internal registers is not handled correctly
 - Sprite 0 hit is only partially implemented:
 	- It works if you assume no background pixels are transparent
 	- It does not factor in some of the weird quirks
@@ -29,13 +30,17 @@ PPU & rendering issues:
 	- This might sound like a limit we don't want, but some games actually use this intentionally (like doors in The Legend of Zelda)
 	- Sprite overflow flag is not set either (which some games might depend on)
 - Scrolling is implemented, but not well tested since the only ROMs I'm testing don't use scrolling
-- Exact behavior of updating PPU outside of VBLANK is not fully emulated
+- Exact behavior when updating PPU outside of VBLANK is not fully emulated
 
 Next goals:
 
 - Code cleanups
 - Mid-frame updates
 - Other PPU features & behaviors
+- Basic APU emulation (without actually playing audio yet)
+
+Lower priority stuff:
+
 - Player 2 controller support
 
 Future goals:

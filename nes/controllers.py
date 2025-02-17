@@ -30,7 +30,7 @@ class Controllers:
 
 	def set_button(self, button: Button, pressed: bool, player: int = 1) -> None:
 
-		logger.info(f'Player {player}, Button: {button.name}, Pressed: {pressed}')
+		logger.debug(f'Player {player}, Button: {button.name}, Pressed: {pressed}')
 
 		bit_mask = 1 << int(button)
 
