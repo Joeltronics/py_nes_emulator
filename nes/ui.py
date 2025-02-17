@@ -3,6 +3,7 @@
 import logging
 import pygame
 
+from nes.controllers import Controllers, Button
 from nes.renderer import Renderer
 from nes.graphics_utils import array_to_surface, upscale
 
@@ -10,10 +11,25 @@ from nes.graphics_utils import array_to_surface, upscale
 logger = logging.getLogger(__name__)
 
 
+# TODO: Load key bindings from file
+KEY_BINDINGS: dict = {
+	pygame.K_w: Button.up,
+	pygame.K_a: Button.left,
+	pygame.K_s: Button.down,
+	pygame.K_d: Button.right,
+	pygame.K_j: Button.a,
+	pygame.K_l: Button.b,
+	pygame.K_RSHIFT: Button.select,
+	pygame.K_RETURN: Button.start,
+}
+
+
 class Ui:
-	def __init__(self, renderer: Renderer):
+	def __init__(self, controllers: Controllers, renderer: Renderer):
 
 		self.running = False
+
+		self.controllers = controllers
 		self.renderer = renderer
 
 		self.screen = pygame.display.set_mode((128 + 512 + 512, 480 + 256 + 8))
@@ -53,6 +69,15 @@ class Ui:
 
 	def handle_events(self):
 		for event in pygame.event.get():
-			if event.type == pygame.QUIT:
-				logger.info('Received pygame.QUIT event')
-				self.running = False
+			match event.type:
+				case pygame.QUIT:
+					logger.info('Received pygame.QUIT event')
+					self.running = False
+				case pygame.KEYDOWN | pygame.KEYUP:
+					self._handle_key(event)
+
+	def _handle_key(self, event):
+		button = KEY_BINDINGS.get(event.key)
+		if button is not None:
+			down = (event.type == pygame.KEYDOWN)
+			self.controllers.set_button(button, down)

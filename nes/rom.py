@@ -6,6 +6,9 @@ from pathlib import Path
 from os import PathLike
 
 
+logger = logging.getLogger(__name__)
+
+
 @dataclass
 class INesHeader:
 	# TODO: other parameters that are commented out
@@ -78,7 +81,7 @@ class Rom:
 		self.header = INesHeader.from_data(data[:16])
 		data = data[16:]
 
-		logging.info(f'Mapper: {self.header.mapper}')
+		logger.info(f'Mapper: {self.header.mapper}')
 
 		if self.header.trainer:
 			logging.info('ROM has trainer')
@@ -88,8 +91,8 @@ class Rom:
 		prg_length = self.header.prg_rom_size_16kb_chunks * 16384
 		chr_length = self.header.chr_rom_size_8kb_chunks * 8192
 
-		logging.info(f'PRG ROM size: {prg_length // 1024} kiB')
-		logging.info(f'CHR ROM size: {chr_length // 1024} kiB')
+		logger.info(f'PRG ROM size: {prg_length // 1024} kiB ({self.header.prg_rom_size_16kb_chunks} 16K chunks)')
+		logger.info(f'CHR ROM size: {chr_length // 1024} kiB ({self.header.chr_rom_size_8kb_chunks} 8K chunks)')
 
 		if len(data) != prg_length + chr_length:
 			raise ValueError(f'Invalid ROM data section length - expected {prg_length + chr_length}, actual {len(data)}')

@@ -5,6 +5,7 @@ from typing import Final
 from pathlib import Path
 
 from nes.apu import Apu
+from nes.controllers import Controllers
 from nes.ppu import Ppu
 from nes.types import uint8, int8, pointer16
 
@@ -76,6 +77,7 @@ class Cpu:
 			rom_prg: bytes,
 			ppu: Ppu,
 			apu: Apu,
+			controllers: Controllers,
 
 			sleep_on_branch_loop: bool = False,
 
@@ -91,6 +93,7 @@ class Cpu:
 		self.rom_prg: Final[bytes] = rom_prg
 		self.ppu: Final[Ppu] = ppu
 		self.apu: Final[Apu] = apu
+		self.controllers: Final[Controllers] = controllers
 
 		self.stop_on_vblank_start: bool = stop_on_vblank_start
 		self.stop_on_vblank_end: bool = stop_on_vblank_end
@@ -212,6 +215,10 @@ class Cpu:
 			wrapped_addr = 0x2000 + (addr & 0x07)
 			return self.ppu.read_reg_from_cpu(wrapped_addr)
 
+		elif addr == 0x4016 or addr == 0x4017:
+			# Controllers
+			return self.controllers.read_register_from_cpu(addr)
+
 		elif addr < 0x4020:
 			# APU
 			return self.apu.read_reg_from_cpu(addr)
@@ -238,6 +245,10 @@ class Cpu:
 			# OAMDMA
 			self.oam_dma(val)
 
+		elif addr == 0x4016:
+			# Controllers
+			self.controllers.write_register_4016_from_cpu(val)
+
 		elif addr < 0x2000:
 			# RAM
 			self.ram[addr & 0x07FF] = val
@@ -250,7 +261,9 @@ class Cpu:
 			# APU
 			self.apu.write_reg_from_cpu(addr, val)
 
-		# TODO: support mappers
+		else:
+			# TODO: support mappers
+			raise NotImplementedError(f'Writing to memory ${addr:04X} not implemented')
 
 	# DMA
 

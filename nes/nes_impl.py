@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from nes.apu import Apu
+from nes.controllers import Controllers
 from nes.cpu import Cpu
 from nes.ppu import Ppu
 from nes.renderer import Renderer
@@ -25,6 +26,8 @@ class Nes:
 
 		self.rom = rom
 
+		self.controllers = Controllers()
+
 		self.ui = None
 		self.renderer = None
 		if render:
@@ -32,7 +35,10 @@ class Nes:
 				rom_chr=self.rom.chr,
 				rom_header=self.rom.header,
 			)
-			self.ui = Ui(renderer=self.renderer)
+			self.ui = Ui(
+				controllers=self.controllers,
+				renderer=self.renderer,
+			)
 
 		self.apu = Apu()
 		self.ppu = Ppu(
@@ -43,6 +49,7 @@ class Nes:
 			rom_prg=self.rom.prg,
 			apu=self.apu,
 			ppu=self.ppu,
+			controllers=self.controllers,
 			sleep_on_branch_loop=sleep_cpu,
 			log_instructions_to_file=log_instructions_to_file,
 			log_instructions_to_stream=log_instructions_to_stream,

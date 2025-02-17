@@ -15,7 +15,7 @@ My main goal is to get this to the point where it can emulate Super Mario Bros -
 
 ### Current status
 
-Emulation is basic, and there's no controller input yet. The Donkey Kong, Ice Climber, and Balloon Fight title screens can all emulate, including Balloon Fight's attract mode. There's also no APU or mapper support.
+Emulation is basic. Ballon Fight seems to work; Donkey Kong seems to work, although the title screen doesn't seem to accept controller inputs properly. Ice Climber crashes early due to an unsupported PPU feature. The Super Mario Bros title screen doesn't work. There's also no APU or mapper support.
 
 PPU & rendering issues:
 
@@ -33,10 +33,10 @@ PPU & rendering issues:
 
 Next goals:
 
-- Controller support
 - Code cleanups
 - Mid-frame updates
 - Other PPU features & behaviors
+- Player 2 controller support
 
 Future goals:
 
