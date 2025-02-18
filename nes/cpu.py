@@ -1456,6 +1456,10 @@ class Cpu:
 			self.n = bool(result & 0b1000_0000)
 
 		if self.sleep_on_branch_loop:
+
+			# TODO: Some games (e.g. Donkey Kong) tick RNG during main, so they won't sleep; see if there's a way to
+			# still optimize this
+
 			if branched is not None:
 				if branched:
 					self.on_branch_check_loop()

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+from math import ceil
 import logging
 from typing import Callable, Final
 
@@ -75,6 +76,8 @@ class Ppu:
 		self.vblank_start_callback: Callable[[], None] | None = None
 		self.vblank_end_callback: Callable[[], None] | None = None
 
+		self.debug_status_im = np.zeros((TOTAL_ROWS, 3), dtype=np.uint8)
+
 	@property
 	def vblank_nmi_enable(self) -> bool:
 		return bool(self.ppuctrl & 0b1000_0000)
@@ -98,6 +101,13 @@ class Ppu:
 	def tick_clock_fom_cpu(self, cpu_cycles: int) -> None:
 		ppu_cycles = 3 * cpu_cycles
 		self._tick_clock(ppu_cycles)
+
+	def done_rendering(self):
+		"""
+		Indicate that rendering a frame is complete
+		"""
+		self.debug_status_im[:] = 31
+		self.debug_status_im[VBLANK_START_ROW:, ...] = (127, 127, 127)
 
 	def _tick_clock(self, cycles: int) -> None:
 		self.col += cycles
@@ -177,12 +187,24 @@ class Ppu:
 
 		# TODO: store which rows we've skipped, to display for debugging
 
+		row_start = self.row
+
 		# TODO optimization: Instead of ticking 1 row at a time, calculate when the next PPUSTATUS change will happen
 		# and jump straight there (although with the way tick_clock works right now, this might not be that much of an
 		# optimization)
 		while self.ppustatus == ppustatus:
 			# Tick ahead 1 row
 			self._tick_clock(COLUMNS)
+
+		row_end = self.row
+
+		assert row_end != row_start
+
+		if row_end >= row_start:
+			self.debug_status_im[row_start:row_end, 2] = 255
+		else:
+			self.debug_status_im[row_start:, 2] = 255
+			self.debug_status_im[:row_end, 2] = 255
 
 	def _vblank_start(self):
 		# Set vblank
@@ -303,6 +325,8 @@ class Ppu:
 			case _:
 				raise NotImplementedError(f'TODO: support writing PPU register ${addr:04X}')
 
+		self.debug_status_im[self.row, 0] = 255
+
 		if rendering and (not self.sprite_zero_hit):
 			# If updating oustide VBLANK, update sprite zero location
 			self.sprite_zero_hit_loc = self._calculate_sprite_zero_hit()
@@ -364,3 +388,8 @@ class Ppu:
 		# If it's allowed, update self.sprite_zero_hit_loc
 		assert len(data) == len(self.oam)
 		self.oam[:] = data
+
+		row_start = self.row
+		row_end = row_start + ceil(513 * 3 / COLUMNS)
+
+		self.debug_status_im[row_start:row_end, 1] = 255

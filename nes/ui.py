@@ -29,6 +29,9 @@ KEY_BINDINGS: dict = {
 FPS_TEXT_FONT_SIZE: Final[int] = 18
 
 
+BG_COLOR: Final = (63, 63, 63)
+
+
 class Ui:
 	def __init__(self, controllers: Controllers, renderer: Renderer):
 
@@ -39,7 +42,7 @@ class Ui:
 		self.controllers = controllers
 		self.renderer = renderer
 
-		self.screen = pygame.display.set_mode((128 + 512 + 512, 480 + 256 + 8))
+		self.screen = pygame.display.set_mode((128 + 512 + 8 + 512, 480 + 256 + 8))
 
 		self.font = pygame.freetype.SysFont(
 			pygame.freetype.get_default_font(),
@@ -52,13 +55,14 @@ class Ui:
 		self.sprite_layer_surf = array_to_surface(self.renderer.get_sprite_layer_debug_im())
 		self.sprites_surf = array_to_surface(self.renderer.get_sprites_debug_im(), 2)
 		self.frame_surf = array_to_surface(self.renderer.get_frame_im(), 2)
+		self.ppu_debug_surf = None
 
 		pygame.display.set_caption('NES Emulator')
 
 		info = pygame.display.Info()
 		logging.info(f'Display info:\n{info}')
 
-		self.screen.fill((0, 0, 0))
+		self.screen.fill(BG_COLOR)
 		self.screen.blit(self.chr_surf, (0, 0))
 		pygame.display.flip()
 
@@ -66,7 +70,7 @@ class Ui:
 
 	def draw(self, fps_str: str = '') -> None:
 
-		self.screen.fill((0, 0, 0))
+		self.screen.fill(BG_COLOR)
 
 		self.screen.blit(self.chr_surf, (0, 0))
 
@@ -77,16 +81,22 @@ class Ui:
 		self.screen.blit(self.full_palette_surf, (0, 256 + 16))
 
 		array_to_surface(self.renderer.get_nametables_debug_im(), into=self.nametable_surf)
-		self.screen.blit(self.nametable_surf, (128 + 512, 0))
+		self.screen.blit(self.nametable_surf, (128 + 512 + 8, 0))
 
 		array_to_surface(self.renderer.get_sprite_layer_debug_im(), into=self.sprite_layer_surf)
-		self.screen.blit(self.sprite_layer_surf, (128 + 512, 480))
+		self.screen.blit(self.sprite_layer_surf, (128 + 512 + 8, 480))
 
 		array_to_surface(self.renderer.get_sprites_debug_im(), 2, into=self.sprites_surf)
-		self.screen.blit(self.sprites_surf, (128 + 512 + 256 + 8, 480))
+		self.screen.blit(self.sprites_surf, (128 + 512 + 256 + 8 + 8, 480))
 
 		array_to_surface(self.renderer.get_frame_im(), 2, into=self.frame_surf)
 		self.screen.blit(self.frame_surf, (128, 0))
+
+		# TODO: space for this
+		ppu_debug_im = self.renderer.get_ppu_debug_im()
+		if ppu_debug_im is not None:
+			self.ppu_debug_surf = array_to_surface(ppu_debug_im, (2, 8), into=self.ppu_debug_surf)
+			self.screen.blit(self.ppu_debug_surf, (128 + 512, 0))
 
 		if fps_str:
 			lines = fps_str.splitlines()

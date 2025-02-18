@@ -116,6 +116,8 @@ class Renderer:
 
 		self._current_palette_debug_im = np.zeros((2, 16, 3), dtype=np.uint8)
 
+		self._ppu_debug_im = None
+
 		if save_chr:
 			_save_chr(self._chr_im)
 
@@ -145,6 +147,9 @@ class Renderer:
 
 	def get_full_palette_debug_im(self) -> np.ndarray:
 		return self._full_palette_debug_im
+
+	def get_ppu_debug_im(self) -> np.ndarray | None:
+		return self._ppu_debug_im
 
 	def _mirror(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:
 		if self._vertical_mirroring:
@@ -341,3 +346,6 @@ class Renderer:
 
 		# Apply NES palette (6-bit -> 8-bit RGB)
 		self._frame_im = NES_PALETTE[frame_indexed]
+
+		self._ppu_debug_im = ppu.debug_status_im.reshape((ppu.debug_status_im.shape[0], 1, 3)).copy()
+		ppu.done_rendering()

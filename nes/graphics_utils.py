@@ -12,18 +12,20 @@ def grey_to_rgb(arr: np.ndarray) -> np.ndarray:
 	return np.dstack([arr, arr, arr])
 
 
-def upscale(arr: np.ndarray, scale: int) -> np.ndarray:
+def upscale(arr: np.ndarray, scale: int | tuple[int, int]) -> np.ndarray:
 	"""
 	Nearest-neighbour upscaling
 	"""
-	return arr.repeat(scale, 0).repeat(scale, 1)
+	if isinstance(scale, int):
+		scale = (scale, scale)
+	return arr.repeat(scale[0], 0).repeat(scale[1], 1)
 
 
 _upscale = upscale
 
 
-def array_to_surface(arr: np.ndarray, upscale: int = 1, into=None):
-	if upscale > 1:
+def array_to_surface(arr: np.ndarray, upscale: int | tuple[int, int] = 1, into=None):
+	if (not isinstance(upscale, int)) or (upscale > 1):
 		arr = _upscale(arr, upscale)
 
 	arr = arr.swapaxes(1,0)
