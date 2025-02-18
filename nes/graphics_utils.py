@@ -22,10 +22,17 @@ def upscale(arr: np.ndarray, scale: int) -> np.ndarray:
 _upscale = upscale
 
 
-def array_to_surface(arr: np.ndarray, upscale: int = 1):
+def array_to_surface(arr: np.ndarray, upscale: int = 1, into=None):
 	if upscale > 1:
 		arr = _upscale(arr, upscale)
-	return pygame.surfarray.make_surface(arr.swapaxes(1,0))
+
+	arr = arr.swapaxes(1,0)
+
+	if into is None:
+		return pygame.surfarray.make_surface(arr)
+	else:
+		pygame.pixelcopy.array_to_surface(into, arr)
+		return into
 
 
 def draw_rectangle(arr: np.ndarray, color, x, y, w, h) -> None:

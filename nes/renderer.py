@@ -105,8 +105,8 @@ class Renderer:
 		self._nametables_indexed = np.zeros((480, 512), dtype=np.uint8)
 		self._nametable_debug_im = np.zeros((480, 512, 3), dtype=np.uint8)
 
-		self._sprite_layer_indexed = np.zeros((240 + 7, 256 + 7), dtype=np.uint8)
-		self._sprite_layer_debug_im = np.zeros((240 + 7, 256 + 7, 3), dtype=np.uint8)
+		self._sprite_layer_indexed = np.zeros((256 + 8, 256 + 7), dtype=np.uint8)
+		self._sprite_layer_debug_im = np.zeros((256 + 8, 256 + 7, 3), dtype=np.uint8)
 
 		self._sprites_debug_im = np.zeros((64, 64, 3), dtype=np.uint8)
 

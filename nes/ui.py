@@ -7,7 +7,7 @@ from typing import Final
 
 from nes.controllers import Controllers, Button
 from nes.renderer import Renderer
-from nes.graphics_utils import array_to_surface, upscale
+from nes.graphics_utils import array_to_surface
 
 
 logger = logging.getLogger(__name__)
@@ -43,18 +43,23 @@ class Ui:
 
 		self.font = pygame.freetype.SysFont(
 			pygame.freetype.get_default_font(),
-			FPS_TEXT_FONT_SIZE,
-			# bold=False,
-			# italic=False,
-		)
+			FPS_TEXT_FONT_SIZE, bold=False, italic=False)
 
 		self.chr_surf = array_to_surface(self.renderer.get_chr_im())
+		self.current_palette_surf = array_to_surface(self.renderer.get_current_palettes_debug_im(), 8)
+		self.full_palette_surf = array_to_surface(self.renderer.get_full_palette_debug_im(), 8)
+		self.nametable_surf = array_to_surface(self.renderer.get_nametables_debug_im())
+		self.sprite_layer_surf = array_to_surface(self.renderer.get_sprite_layer_debug_im())
+		self.sprites_surf = array_to_surface(self.renderer.get_sprites_debug_im(), 2)
+		self.frame_surf = array_to_surface(self.renderer.get_frame_im(), 2)
+
+		pygame.display.set_caption('NES Emulator')
+
+		info = pygame.display.Info()
+		logging.info(f'Display info:\n{info}')
+
+		self.screen.fill((0, 0, 0))
 		self.screen.blit(self.chr_surf, (0, 0))
-
-		pygame.display.set_caption('NES Emulator') 
-
-		# background_colour = (0, 0, 0)
-		# self.screen.fill(background_colour)
 		pygame.display.flip()
 
 		self.running = True
@@ -65,23 +70,23 @@ class Ui:
 
 		self.screen.blit(self.chr_surf, (0, 0))
 
-		current_palette = array_to_surface(self.renderer.get_current_palettes_debug_im(), 8)
-		self.screen.blit(current_palette, (0, 256))
+		array_to_surface(self.renderer.get_current_palettes_debug_im(), 8, into=self.current_palette_surf)
+		self.screen.blit(self.current_palette_surf, (0, 256))
 
-		full_palette = array_to_surface(self.renderer.get_full_palette_debug_im(), 8)
-		self.screen.blit(full_palette, (0, 256 + 16))
+		array_to_surface(self.renderer.get_full_palette_debug_im(), 8, into=self.full_palette_surf)
+		self.screen.blit(self.full_palette_surf, (0, 256 + 16))
 
-		nametable = array_to_surface(self.renderer.get_nametables_debug_im())
-		self.screen.blit(nametable, (128 + 512, 0))
+		array_to_surface(self.renderer.get_nametables_debug_im(), into=self.nametable_surf)
+		self.screen.blit(self.nametable_surf, (128 + 512, 0))
 
-		sprite_layer = array_to_surface(self.renderer.get_sprite_layer_debug_im())
-		self.screen.blit(sprite_layer, (128 + 512, 480))
+		array_to_surface(self.renderer.get_sprite_layer_debug_im(), into=self.sprite_layer_surf)
+		self.screen.blit(self.sprite_layer_surf, (128 + 512, 480))
 
-		sprites = array_to_surface(self.renderer.get_sprites_debug_im(), 2)
-		self.screen.blit(sprites, (128 + 512 + 256 + 8, 480))
+		array_to_surface(self.renderer.get_sprites_debug_im(), 2, into=self.sprites_surf)
+		self.screen.blit(self.sprites_surf, (128 + 512 + 256 + 8, 480))
 
-		frame = array_to_surface(self.renderer.get_frame_im(), 2)
-		self.screen.blit(frame, (128, 0))
+		array_to_surface(self.renderer.get_frame_im(), 2, into=self.frame_surf)
+		self.screen.blit(self.frame_surf, (128, 0))
 
 		if fps_str:
 			lines = fps_str.splitlines()
