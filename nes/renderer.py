@@ -5,6 +5,7 @@ from typing import Final
 
 import numpy as np
 
+from nes.ppu import Ppu
 from nes.rom import INesHeader
 from nes.graphics_utils import chr_to_array, chr_to_stacked, grey_to_rgb, load_palette_file, upscale, draw_rectangle
 from nes.types import uint8, pointer16
@@ -88,9 +89,12 @@ class Renderer:
 			self,
 			rom_chr: bytes,
 			rom_header: INesHeader,
+			ppu: Ppu,
 			*,
 			save_chr: bool = False,
 			):
+
+		self._ppu = ppu
 
 		self._rom_chr = rom_chr
 		self._vertical_mirroring = rom_header.vertical_mirroring
@@ -152,17 +156,41 @@ class Renderer:
 		return self._ppu_debug_im
 
 	def _mirror(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+
+		ppuctrl = self._ppu.ppuctrl
+
 		if self._vertical_mirroring:
-			row = np.hstack([a, b])
+			# TODO: is this right? test it
+			order = [b, a] if ppuctrl & 0b0000_0001 else [a, b]
+			row = np.hstack(order)
 			return np.vstack([row, row])
 		else:
-			col = np.vstack([a, b])
+			order = [b, a] if ppuctrl & 0b0000_0010 else [a, b]
+			col = np.vstack(order)
 			return np.hstack([col, col])
 
-	def _render_nametables(self, *, ppuctrl: uint8, vram: bytes | bytearray, bg_palettes: np.ndarray) -> None:
+	def _rewrap(self, im: np.ndarray) -> np.ndarray:
 
-		if ppuctrl & 0b0000_0011:
-			raise NotImplementedError('Base nametable address is not yet supported')
+		ppuctrl = self._ppu.ppuctrl
+
+		if self._vertical_mirroring:
+			# TODO: as above, test this
+			if ppuctrl & 0b0000_0001:
+				a = im[:, :256, ...]
+				b = im[:, 256:, ...]
+				return np.hstack((b, a))
+		else:
+			if ppuctrl & 0b0000_0010:
+				a = im[:240, ...]
+				b = im[240:, ...]
+				return np.vstack((b, a))
+
+		return im
+
+	def _render_nametables(self, *, bg_palettes: np.ndarray) -> None:
+
+		vram = self._ppu.vram
+		ppuctrl = self._ppu.ppuctrl
 
 		nametable_a = vram[:0x400]
 		nametable_b = vram[0x400:0x800]
@@ -173,8 +201,8 @@ class Renderer:
 
 		if True:
 			# Fast numpy code
-			nametable_a_tileidx = np.frombuffer(nametable_a[:960], dtype=np.uint8).reshape((240 // 8, 256 // 8)).astype(np.intp)
-			nametable_b_tileidx = np.frombuffer(nametable_b[:960], dtype=np.uint8).reshape((240 // 8, 256 // 8)).astype(np.intp)
+			nametable_a_tileidx = np.frombuffer(nametable_a[:960], dtype=np.uint8).reshape((240 // 8, 256 // 8)).astype(np.intp, copy=True)
+			nametable_b_tileidx = np.frombuffer(nametable_b[:960], dtype=np.uint8).reshape((240 // 8, 256 // 8)).astype(np.intp, copy=True)
 		else:
 			# Slow iterative code
 			nametable_a_tileidx = np.empty((240 // 8, 256 // 8), dtype=np.intp)
@@ -207,7 +235,7 @@ class Renderer:
 		nametable_a_indexed = _palettize_nametable(nametable_data=nametable_a, nametable_chr_2bit=nametable_a_2bit, palettes=bg_palettes)
 		nametable_b_indexed = _palettize_nametable(nametable_data=nametable_b, nametable_chr_2bit=nametable_b_2bit, palettes=bg_palettes)
 
-		# TODO: attribute table debug palette image for debugging
+		# TODO: attribute table debug palette image
 
 		# Apply mirroring
 		nametables_indexed = self._mirror(nametable_a_indexed, nametable_b_indexed)
@@ -219,11 +247,12 @@ class Renderer:
 	def _render_sprites(
 			self,
 			*,
-			ppuctrl: uint8,
-			oam: bytes | bytearray,
 			sprite_palettes: np.ndarray,
 			render_offscreen_sprites: bool = True,  # TODO: set this False, for optimization purposes
 			) -> None:
+
+		oam = self._ppu.oam
+		ppuctrl = self._ppu.ppuctrl
 
 		sprites_8x16 = bool(ppuctrl & 0b0010_0000)
 
@@ -297,46 +326,60 @@ class Renderer:
 
 		self._sprite_layer_debug_im = sprites_im
 
-	def render_frame(self, ppu: 'Ppu'):
+	def _load_palettes(self) -> np.ndarray:
+
+		palettes = np.frombuffer(self._ppu.palette_ram, dtype=np.uint8).reshape((8, 4)).copy()
+
+		# Make palette image before applying background colors
+		palette_ram_idxs = palettes.reshape((2, 16))
+		self._current_palette_debug_im = NES_PALETTE[palette_ram_idxs]
+		assert self._current_palette_debug_im.shape == (2, 16, 3)
+		# TODO: indicate unused palette entries, if they differ from background (draw an X on them?)
+
+		bg_color = palettes[0, 0]
+
+		bg_palettes = palettes[:4, :]
+		sprite_palettes = palettes[4:8, :]
+
+		# Value 255 indicates a transparent pixel
+		# TODO: may want to use 255 for bg_palettes too once handling sprite priority
+		# (treat this as 4 layers: bgcolor, bg sprites, nametable, fg sprites)
+
+		bg_palettes[:, 0] = bg_color
+		sprite_palettes[:, 0] = 255
+
+		return bg_palettes, sprite_palettes
+
+	def render_frame(self):
+
+		ppu = self._ppu
 
 		# Read from PPU
-		# TODO: make functions for this instead of accessing ppu members directly (and make the members private)
-		ppuctrl = ppu.ppuctrl
+		# TODO: make PPU getter functions instead of accessing members directly (and make the members private)
 		ppumask = ppu.ppumask  # TODO: use PPUMASK
-		vram = ppu.vram
-		oam = ppu.oam
-		palette_ram = ppu.palette_ram
 		scroll_x = ppu.scroll_x
 		scroll_y = ppu.scroll_y
 
 		# Palettes
-
-		palettes = np.frombuffer(palette_ram, dtype=np.uint8).reshape((8, 4)).copy()
-		# Make palette image before applying background color
-		palette_ram_idxs = palettes.copy().reshape((2, 16))
-		self._current_palette_debug_im = NES_PALETTE[palette_ram_idxs]
-		assert self._current_palette_debug_im.shape == (2, 16, 3)
-		# TODO: indicate unused palette entries, if they differ from background (draw an X on them?)
-		bg_palettes = palettes[:4, :]
-		sprite_palettes = palettes[4:8, :]
-		# Value 255 indicates a transparent pixel
-		# TODO: may want to use 255 for bg_palettes too once handling sprite priority
-		# (treat this as 4 layers: bgcolor, bg sprites, nametable, fg sprites)
-		bg_palettes[:, 0] = palettes[0, 0]
-		sprite_palettes[:, 0] = 255
+		bg_palettes, sprite_palettes = self._load_palettes()
 
 		# Make nametable (background) images
-		self._render_nametables(ppuctrl=ppuctrl, vram=vram, bg_palettes=bg_palettes)
+		self._render_nametables(bg_palettes=bg_palettes)
 
 		# Draw scroll area on debug nametable image
-		draw_rectangle(self._nametable_debug_im, (255, 0, 255), scroll_x, scroll_y, 256, 240)
+		draw_rectangle(self._nametable_debug_im, (255, 0, 255), scroll_x, scroll_y, 256, 240, wrap=True)
+
+		# Re-wrap debug nametable image
+		self._nametable_debug_im = self._rewrap(self._nametable_debug_im)
 
 		# Sprites
-		self._render_sprites(ppuctrl=ppuctrl, oam=oam, sprite_palettes=sprite_palettes)
+		self._render_sprites(sprite_palettes=sprite_palettes)
 
 		# Composite background & sprites into frame
 
 		nametables_onscreen = self._nametables_indexed[scroll_y : 240 + scroll_y, scroll_x : 256 + scroll_x]
+
+		assert nametables_onscreen.shape == (240, 256)
 		sprites_onscreen = self._sprite_layer_indexed[:240, :256]
 		frame_indexed = np.where(
 			sprites_onscreen < 64,

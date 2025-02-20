@@ -97,23 +97,12 @@ class Nes:
 
 		self.controllers = Controllers()
 
-		self.ui = None
-		self.renderer = None
-		if render:
-			self.renderer = Renderer(
-				rom_chr=self.rom.chr,
-				rom_header=self.rom.header,
-			)
-			self.ui = Ui(
-				controllers=self.controllers,
-				renderer=self.renderer,
-			)
-
 		self.apu = Apu()
 		self.ppu = Ppu(
 			rom_chr=self.rom.chr,
 			rom_header=self.rom.header,
 		)
+
 		self.cpu = Cpu(
 			rom_prg=self.rom.prg,
 			apu=self.apu,
@@ -127,6 +116,19 @@ class Nes:
 			stop_on_vblank_start=breakpoints,
 			stop_on_vblank_end=breakpoints,
 		)
+
+		self.ui = None
+		self.renderer = None
+		if render:
+			self.renderer = Renderer(
+				ppu=self.ppu,
+				rom_chr=self.rom.chr,
+				rom_header=self.rom.header,
+			)
+			self.ui = Ui(
+				controllers=self.controllers,
+				renderer=self.renderer,
+			)
 
 	def _handle_breakpoint(self):
 
@@ -163,7 +165,7 @@ class Nes:
 				timer.checkin('Emu')
 
 				# TODO: don't only render at vblank, to allow for mid-frame PPU changes
-				self.renderer.render_frame(self.ppu)
+				self.renderer.render_frame()
 				timer.checkin('Render')
 
 				fps_str = timer.fps_str()

@@ -37,11 +37,34 @@ def array_to_surface(arr: np.ndarray, upscale: int | tuple[int, int] = 1, into=N
 		return into
 
 
-def draw_rectangle(arr: np.ndarray, color, x, y, w, h) -> None:
-	arr[y        , x : x + w - 1, ...] = color
-	arr[y + h - 1, x : x + w - 1, ...] = color
-	arr[y : y + h - 1, x        , ...] = color
-	arr[y : y + h - 1, x + w - 1, ...] = color
+def draw_rectangle(
+		arr: np.ndarray,
+		color,
+		x: int, y: int, w: int, h: int,
+		*,
+		wrap=False,
+		) -> None:
+
+	x1 = x
+	y1 = y
+	x2 = x + w - 1
+	y2 = y + h - 1
+
+	if wrap:
+		arr_h, arr_w = arr.shape[:2]
+		x2_clipped = min(x2, arr_w - 1)
+		y2_clipped = min(y2, arr_h - 1)
+		arr[y1              , x1 : x2_clipped , ...] = color
+		arr[     y2_clipped , x1 : x2_clipped , ...] = color
+		arr[y1 : y2_clipped , x1                    , ...] = color
+		arr[y1 : y2_clipped ,      x2_clipped , ...] = color
+		# TODO: wrapped part
+
+	else:
+		arr[y1      , x1 : x2 , ...] = color
+		arr[     y2 , x1 : x2 , ...] = color
+		arr[y1 : y2 , x1      , ...] = color
+		arr[y1 : y2 ,      x2 , ...] = color
 
 
 def chr_to_array(rom_chr: bytes, width=16) -> np.ndarray:

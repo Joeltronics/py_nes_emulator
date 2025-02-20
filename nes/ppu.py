@@ -9,7 +9,6 @@ import numpy as np
 from nes.graphics_utils import chr_to_array, chr_to_stacked, grey_to_rgb, load_palette_file, upscale, draw_rectangle
 from nes.rom import INesHeader
 from nes.types import uint8, pointer16
-from nes.renderer import Renderer
 
 
 logger = logging.getLogger(__name__)
@@ -332,10 +331,6 @@ class Ppu:
 			self.sprite_zero_hit_loc = self._calculate_sprite_zero_hit()
 
 	def nametable_vram_addr(self, addr: pointer16) -> int:
-
-		if self.ppuctrl & 0x03:
-			raise NotImplementedError('Base nametable address is not yet supported')
-
 		nametable_idx, addr_low = divmod(addr & 0x0FFF, 0x400)
 		return addr_low + self.nametable_layout[nametable_idx]
 

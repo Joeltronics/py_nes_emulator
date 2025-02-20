@@ -15,7 +15,13 @@ My main goal is to get this to the point where it can emulate Super Mario Bros -
 
 ### Current status
 
-There's basic emulation. Balloon Fight & Donkey Kong seem to work. Ice Climber crashes early due to an unsupported PPU feature. The Super Mario Bros title screen doesn't work, likely due to something I'm not doing right with the PPU (see below). There's also no APU or mapper support.
+There's basic emulation, but no APU or mapper support:
+
+- **Donkey Kong**: seems to work (but slow)
+- **Ice Climber**: seems to work (but slow)
+- **Balloon Fight**: seems to work (and not slow!), although in Balloon Trip mode the score scrolls with the level since we don't support split-screen rendering yet
+- **Super Mario Bros**: Title screen doesn't work, likely due to something we're not doing right with the PPU (see below)
+- **Ice Hockey**: Title screen doesn't render properly, which is expected due to some unimplemented PPU features. But what isn't expected is that it gets stuck on the title screen.
 
 PPU & rendering issues:
 
@@ -34,8 +40,9 @@ PPU & rendering issues:
 
 Next goals:
 
-- Code cleanups
+- Proper PPU register implementation
 - Mid-frame updates
+- Code cleanups
 - Other PPU features & behaviors
 - Basic APU emulation (without actually playing audio yet)
 
