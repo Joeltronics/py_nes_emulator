@@ -220,6 +220,10 @@ class Renderer:
 		# Copy tiles from CHR
 
 		# TODO: see if this can be numpy optimized
+		# nametable_a_tiles = self._chr_tiles[nametable_a_tileidx]
+		# nametable_b_tiles = self._chr_tiles[nametable_b_tileidx]
+		# print(f'{nametable_a_tiles.shape=}')
+		# exit(1)
 
 		nametable_a_2bit = np.empty((240, 256), dtype=np.uint8)
 		nametable_b_2bit = np.empty((240, 256), dtype=np.uint8)
@@ -332,14 +336,14 @@ class Renderer:
 	def _load_palettes(self) -> np.ndarray:
 
 		palettes = np.frombuffer(self._ppu.palette_ram, dtype=np.uint8).reshape((8, 4)).copy()
+		bg_color = palettes[0, 0]
+		for idx in range(4):
+			palettes[4 + idx, 0] = palettes[idx, 0]
 
 		# Make palette image before applying background colors
 		palette_ram_idxs = palettes.reshape((2, 16))
 		self._current_palette_debug_im = NES_PALETTE[palette_ram_idxs]
 		assert self._current_palette_debug_im.shape == (2, 16, 3)
-		# TODO: indicate unused palette entries, if they differ from background (draw an X on them?)
-
-		bg_color = palettes[0, 0]
 
 		bg_palettes = palettes[:4, :]
 		sprite_palettes = palettes[4:8, :]

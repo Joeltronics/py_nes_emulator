@@ -362,7 +362,12 @@ class Ppu:
 
 		elif addr < 0x4000:
 			# Palette RAM
-			self.palette_ram[addr % 0x20] = value
+			idx = addr % 0x20
+			if idx >= 0x10 and idx % 4 == 0:
+				# Palette entry 0 is shared between sprite & BG
+				# This neeeded for Super Mario Bros to work properly
+				idx -= 0x10
+			self.palette_ram[idx] = value
 
 		else:
 			raise AssertionError(f'Invalid PPU address: ${addr:04X}')

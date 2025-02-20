@@ -21,7 +21,10 @@ There's basic emulation, but no APU or mapper support:
 - **Ice Climber**: seems to work (but slow)
 - **Balloon Fight**: seems to work (and not slow!), although in Balloon Trip mode the score scrolls with the level since we don't support split-screen rendering yet
 - **Super Mario Bros**: Title screen doesn't work, likely due to something we're not doing right with the PPU (see below)
-- **Ice Hockey**: Title screen doesn't render properly, which is expected due to some unimplemented PPU features. But what isn't expected is that it gets stuck on the title screen.
+- **Excitebike**: Gets stuck on title screen, start & select both act as select
+- **Ice Hockey**: Title screen doesn't render properly, which is expected due to some unimplemented PPU features. But what isn't expected is that it gets stuck on the title screen (problem reading controllers, similar to Excitebike?).
+- **Bomberman**: Title screen works, but gets stuck on the first frame of the game
+- **Galaga**: Doesn't work because 8x16 sprites are not yet supported
 
 PPU & rendering issues:
 
@@ -37,14 +40,15 @@ PPU & rendering issues:
 	- Sprite overflow flag is not set either (which some games might depend on)
 - Scrolling is implemented, but not well tested since the only ROMs I'm testing don't use scrolling
 - Exact behavior when updating PPU outside of VBLANK is not fully emulated
+- 8x16 sprites are not yet supported
 
 Next goals:
 
-- Proper PPU register implementation
-- Mid-frame updates
+- Fix controller implementation
+- Split-screen rendering, to support mid-frame updates
 - Code cleanups
 - Other PPU features & behaviors
-- Basic APU emulation (without actually playing audio yet)
+- Basic APU emulation (without actually playing audio yet - just show audio channel info on-screen)
 
 Lower priority stuff:
 
