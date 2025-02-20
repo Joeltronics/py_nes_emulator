@@ -101,7 +101,7 @@ class Ppu:
 		ppu_cycles = 3 * cpu_cycles
 		self._tick_clock(ppu_cycles)
 
-	def done_rendering(self):
+	def done_rendering(self) -> None:
 		"""
 		Indicate that rendering a frame is complete
 		"""
@@ -130,6 +130,7 @@ class Ppu:
 			if self.sprite_zero_hit_loc[0] == row_num:
 				logger.debug(f'Sprite zero hit on row {row_num}')
 				self.ppustatus |= 0b0100_0000
+				self.debug_status_im[row_num, 1] = 255
 
 		elif row_num == VBLANK_START_ROW:
 			# TODO accuracy: technically this occurs 1 PPU clock later
@@ -146,6 +147,8 @@ class Ppu:
 		"""
 
 		ppumask = self.ppumask
+
+		# TODO: PPUMASK bits 1 or 2
 
 		# If sprite or BG rendering is disabled, we do not hit
 		if (ppumask & 0b0001_1000) != 0b0001_1000:
@@ -176,8 +179,17 @@ class Ppu:
 		if not tile.any():
 			return SPRITE_ZERO_HIT_NONE
 
-		zero_hit_y, zero_hit_x = np.unravel_index(np.argmax(tile), tile.shape)
-		return (zero_hit_y, zero_hit_x)
+		tile_y, tile_x = np.unravel_index(np.argmax(tile), tile.shape)
+
+		x = sprite_x + tile_x
+		y = sprite_y + tile_y
+
+		# x=255 does not trigger sprite 0 hit
+		# https://www.nesdev.org/wiki/PPU_OAM#Sprite_0_hits
+		if x >= 255 or y >= 240:
+			return SPRITE_ZERO_HIT_NONE
+
+		return y, x
 
 	def tick_until_ppustatus_change(self) -> None:
 		logger.debug('Waiting for next PPUSTATUS change')

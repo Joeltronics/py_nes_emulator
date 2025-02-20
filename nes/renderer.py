@@ -318,11 +318,14 @@ class Renderer:
 
 		sprites_im = sprites_indexed.copy()
 		sprite_im_bg = sprites_im >= 64
-		sprites_im[sprite_im_bg] = 0
+		sprites_im[sprite_im_bg] = 0x0F
+		sprites_im[:240, :256][sprite_im_bg[:240, :256]] = 0
 		sprites_im = NES_PALETTE[sprites_im]
-		sprites_im[240, :, ...] = (255, 0, 255)
 
 		sprites_im[np.logical_and(outline_mask, sprite_im_bg), ...] = (255, 0, 255)
+
+		# Special outline for sprite 0
+		draw_rectangle(sprites_im, (0, 255, 0), oam[3], oam[0] + 1, 8, 8)
 
 		self._sprite_layer_debug_im = sprites_im
 
