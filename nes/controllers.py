@@ -26,11 +26,12 @@ class Controllers:
 		self._controller_1_state: uint8 = 0
 		self._controller_2_state: uint8 = 0
 
-		self._latch_bit: uint8 = 0
+		self._controller_1_shift_register: uint8 = 0
+		self._controller_2_shift_register: uint8 = 0
+
+		self._out0: bool = False
 
 	def set_button(self, button: Button, pressed: bool, player: int = 1) -> None:
-
-		logger.debug(f'Player {player}, Button: {button.name}, Pressed: {pressed}')
 
 		bit_mask = 1 << int(button)
 
@@ -39,41 +40,42 @@ class Controllers:
 				self._controller_1_state |= bit_mask
 			else:
 				self._controller_1_state &= ~bit_mask
+			logger.debug(f'Player 1, Button: {button.name}, Pressed: {pressed}, State: {self._controller_1_state:08b}')
 
 		elif player == 2:
 			if pressed:
 				self._controller_2_state |= bit_mask
 			else:
 				self._controller_2_state &= ~bit_mask
+			logger.debug(f'Player 2, Button: {button.name}, Pressed: {pressed}, State: {self._controller_2_state:08b}')
 
 		else:
 			raise ValueError('Player must be 1 or 2')
 
 	def write_register_4016_from_cpu(self, value: uint8) -> None:
-		# TODO accuracy: Actually use value here, for proper emulation
-		self._latch_bit = 1
+
+		out0_new = bool(value & 1)
+
+		if self._out0 and not out0_new:
+			self._controller_1_shift_register = self._controller_1_state
+			self._controller_2_shift_register = self._controller_2_state
+
+		self._out0 = out0_new
+
 		logger.debug(f'Value: 0x{value:02X}, Controller 1: {self._controller_1_state:08b}, Controller 2: {self._controller_2_state:08b}')
 
 	def read_register_from_cpu(self, addr: pointer16) -> uint8:
-		if addr == 0x4016:
 
-			if self._latch_bit > 0b1000_0000:
-				return 1
+		match addr:
+			case 0x4016:
+				ret = self._controller_1_shift_register & 1
+				self._controller_1_shift_register = (self._controller_1_shift_register >> 1) | 0b1000_0000
 
-			ret = int(bool(self._controller_1_state & self._latch_bit))
+			case 0x4017:
+				ret = self._controller_2_shift_register & 1
+				self._controller_2_shift_register = (self._controller_2_shift_register >> 1) | 0b1000_0000
 
-			logger.debug(f'Controller state {self._controller_1_state:08b} & latch {self._latch_bit:08b} = ret {ret}')
+			case _:
+				raise ValueError(f'Invalid controller register: {addr}')
 
-			self._latch_bit <<= 1
-			return ret
-
-		if addr == 0x4017:
-
-			if self._latch_bit > 0b1000_0000:
-				return 1
-
-			ret = int(bool(self._controller_2_state & self._latch_bit))
-			self._latch_bit <<= 1
-			return ret
-
-		raise ValueError(f'Invalid controller register: {addr}')
+		return ret

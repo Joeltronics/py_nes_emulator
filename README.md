@@ -15,19 +15,26 @@ My main goal is to get this to the point where it can emulate Super Mario Bros -
 
 ### Current status
 
-There's basic emulation, but no APU or mapper support:
+There's basic emulation, but no APU or mapper support.
 
-- **Donkey Kong**: seems to work (but slow)
-- **Ice Climber**: seems to work (but slow)
-- **Balloon Fight**: seems to work (and not slow!), although in Balloon Trip mode the score scrolls with the level since we don't support split-screen rendering yet
-- **Super Mario Bros**: Title screen doesn't work, likely due to something we're not doing right with the PPU (see below)
-- **Excitebike**: Gets stuck on title screen, start & select both act as select
-- **Ice Hockey**: Title screen doesn't render properly, which is expected due to some unimplemented PPU features. But what isn't expected is that it gets stuck on the title screen (problem reading controllers, similar to Excitebike?).
-- **Bomberman**: Title screen works, but gets stuck on the first frame of the game
+Working or mostly-working:
+
+- **Donkey Kong**
+- **Ice Climber**
+- **Balloon Fight**: works, but in Balloon Trip mode, the score scrolls with the level since we don't support split-screen rendering yet
+- **Ice Hockey**: works, but the title screen doesn't render properly (expected, due to some unimplemented PPU features)
+
+Major problems:
+
+- **Super Mario Bros**: The ground is 2 tiles higher than it's supposed to be. Everything else appears to run, but it's unplayable since Mario is stuck in the ground.
+- **Excitebike**: Gets stuck on the title screen, because of a bug where pressing the start button behaves as select/down instead, so you can't start the game (up also has this same problem)
+- **Bomberman**: Title screen works, but gets stuck on one of the first frames of the game. Usually the time gets stuck at 200, but sometimes 199. Likely something to do with PPUSTATUS VBLANK flag not getting cleared on read.
 - **Galaga**: Doesn't work because 8x16 sprites are not yet supported
 
 PPU & rendering issues:
 
+- VBLANK flag is not cleared on read
+	- Although this is a simple fix, fixing it breaks "sleep CPU until next PPUSTATUS change" optimization for some unclear reason
 - PPUSCROLL & PPUADDR sharing internal registers is not handled correctly
 - Sprite 0 hit is only partially implemented:
 	- It works if you assume no background pixels are transparent
@@ -38,13 +45,13 @@ PPU & rendering issues:
 - We don't limit to max 8 sprites per line
 	- This might sound like a limit we don't want, but some games actually use this intentionally (like doors in The Legend of Zelda)
 	- Sprite overflow flag is not set either (which some games might depend on)
-- Scrolling is implemented, but not well tested since the only ROMs I'm testing don't use scrolling
 - Exact behavior when updating PPU outside of VBLANK is not fully emulated
+- PPUMASK is not used in rendering
 - 8x16 sprites are not yet supported
 
 Next goals:
 
-- Fix controller implementation
+- Fix games that aren't working
 - Split-screen rendering, to support mid-frame updates
 - Code cleanups
 - Other PPU features & behaviors
@@ -53,13 +60,11 @@ Next goals:
 Lower priority stuff:
 
 - Player 2 controller support
-
-Future goals:
-
-- Emulate Super Mario Bros
+- PC gamepad support
 
 Stretch goals:
 
+- Support other mappers
 - Emulate Mega Man 2
 - Emulate The Legend of Zelda
 
