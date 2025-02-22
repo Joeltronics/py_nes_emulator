@@ -7,7 +7,7 @@ import numpy as np
 
 from nes.ppu import Ppu
 from nes.rom import INesHeader
-from nes.graphics_utils import chr_to_array, chr_to_stacked, grey_to_rgb, load_palette_file, upscale, draw_rectangle
+from nes.graphics_utils import chr_to_array, chr_to_stacked, grey_to_rgb, load_palette_file, draw_rectangle
 from nes.types import uint8, pointer16
 
 
@@ -355,20 +355,29 @@ class Renderer:
 		bg_palettes[:, 0] = bg_color
 		sprite_palettes[:, 0] = 255
 
-		return bg_palettes, sprite_palettes
+		return bg_color, bg_palettes, sprite_palettes
 
 	def render_frame(self):
 
 		ppu = self._ppu
-
-		# Read from PPU
 		# TODO: make PPU getter functions instead of accessing members directly (and make the members private)
-		ppumask = ppu.ppumask  # TODO: use PPUMASK
+
 		scroll_x = ppu.scroll_x
 		scroll_y = ppu.scroll_y
 
+		ppumask = ppu.ppumask
+		emphasize_blue =        bool(ppumask & 0b1000_0000)
+		emphasize_green =       bool(ppumask & 0b0100_0000)
+		emphasize_red =         bool(ppumask & 0b0010_0000)
+		# We could return early if rendering disabled, but then debug images would not get made
+		render_sprites =        bool(ppumask & 0b0001_0000)
+		render_bg =             bool(ppumask & 0b0000_1000)
+		sprites_left_8_pixels = bool(ppumask & 0b0000_0100)
+		bg_left_8_pixels =      bool(ppumask & 0b0000_0010)
+		greyscale =             bool(ppumask & 0b0000_0001)
+
 		# Palettes
-		bg_palettes, sprite_palettes = self._load_palettes()
+		bg_color, bg_palettes, sprite_palettes = self._load_palettes()
 
 		# Make nametable (background) images
 		self._render_nametables(bg_palettes=bg_palettes)
@@ -384,18 +393,41 @@ class Renderer:
 
 		# Composite background & sprites into frame
 
-		nametables_onscreen = self._nametables_indexed[scroll_y : 240 + scroll_y, scroll_x : 256 + scroll_x]
-
+		if render_bg:
+			nametables_onscreen = self._nametables_indexed[scroll_y : 240 + scroll_y, scroll_x : 256 + scroll_x]
+			if not bg_left_8_pixels:
+				nametables_onscreen[:, :8] = bg_color
+		else:
+			nametables_onscreen = np.full((240, 256), fill_value=bg_color, dtype=np.uint8)
 		assert nametables_onscreen.shape == (240, 256)
-		sprites_onscreen = self._sprite_layer_indexed[:240, :256]
-		frame_indexed = np.where(
-			sprites_onscreen < 64,
-			sprites_onscreen,
-			nametables_onscreen,
-		)
+
+		if render_sprites:
+			sprites_onscreen = self._sprite_layer_indexed[:240, :256]
+			if not sprites_left_8_pixels:
+				sprites_onscreen[:, :8] = 255
+			frame_indexed = np.where(
+				sprites_onscreen < 64,
+				sprites_onscreen,
+				nametables_onscreen,
+			)
+		else:
+			frame_indexed = nametables_onscreen
+
+		if greyscale:
+			# https://www.nesdev.org/wiki/PPU_registers#Color_control
+			frame_indexed &= 0x30
 
 		# Apply NES palette (6-bit -> 8-bit RGB)
 		self._frame_im = NES_PALETTE[frame_indexed]
+
+		# Hacky way of doing RGB emphasis (TODO: do it properly)
+		if emphasize_red:
+			self._frame_im[..., 1:] //= 2
+		if emphasize_blue:
+			self._frame_im[..., :2] //= 2
+		if emphasize_green:
+			self._frame_im[..., 0] //= 2
+			self._frame_im[..., 2] //= 2
 
 		self._ppu_debug_im = ppu.debug_status_im.reshape((ppu.debug_status_im.shape[0], 1, 3)).copy()
 		ppu.done_rendering()

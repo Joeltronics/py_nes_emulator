@@ -46,7 +46,6 @@ PPU & rendering issues:
 	- This might sound like a limit we don't want, but some games actually use this intentionally (like doors in The Legend of Zelda)
 	- Sprite overflow flag is not set either (which some games might depend on)
 - Exact behavior when updating PPU outside of VBLANK is not fully emulated
-- PPUMASK is not used in rendering
 - 8x16 sprites are not yet supported
 
 Next goals:
