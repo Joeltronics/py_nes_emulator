@@ -66,6 +66,7 @@ class Ppu:
 
 		self.write_latch: bool = False
 
+		self.vblank: bool = False
 		self.nmi: bool = False
 
 		self.sprite_zero_hit_loc: tuple[int, int] = SPRITE_ZERO_HIT_NONE
@@ -80,10 +81,6 @@ class Ppu:
 	@property
 	def vblank_nmi_enable(self) -> bool:
 		return bool(self.ppuctrl & 0b1000_0000)
-
-	@property
-	def vblank(self) -> bool:
-		return bool(self.ppustatus & 0b1000_0000)
 
 	@property
 	def sprite_zero_hit(self) -> bool:
@@ -109,25 +106,22 @@ class Ppu:
 		self.debug_status_im[VBLANK_START_ROW:, ...] = (127, 127, 127)
 
 	def _tick_clock(self, cycles: int) -> None:
+		# TODO: this is in a hot path, optimize it better (can finish multiple rows at once)
 		self.col += cycles
-		while self.col > COLUMNS:
+		while self.col >= COLUMNS:
 			self.col -= COLUMNS
-			self._finish_row(self.row)
-			self.row = (self.row + 1) % TOTAL_ROWS
+			self._finish_row()
 
-			if self.row == 0:
-				self.frame_count += 1
-				if self.odd_frame:
-					self.col += 1
-				self.odd_frame = not self.odd_frame
+	def _finish_row(self) -> None:
 
-	def _finish_row(self, row_num: int) -> None:
+		# Optimization: this is in a hot path, so cache this for the sake of fewer self.__getattr__()
+		row_num = self.row
 
 		assert row_num < TOTAL_ROWS
 
 		if row_num < 240:
 			# TODO accuracy: fire this as soon as we hit the relevant pixel, not at the end of the row
-			if self.sprite_zero_hit_loc[0] == row_num:
+			if row_num == self.sprite_zero_hit_loc[0]:
 				logger.debug(f'Sprite zero hit on row {row_num}')
 				self.ppustatus |= 0b0100_0000
 				self.debug_status_im[row_num, 1] = 255
@@ -139,6 +133,14 @@ class Ppu:
 		elif row_num == VBLANK_END_ROW:
 			# TODO accuracy: technically this occurs 1 PPU clock later
 			self._vblank_end()
+
+		self.row = row_num = (row_num + 1) % TOTAL_ROWS
+
+		if row_num == 0:
+			self.frame_count += 1
+			if self.odd_frame:
+				self.col += 1
+			self.odd_frame = not self.odd_frame
 
 	def _calculate_sprite_zero_hit(self) -> tuple[int, int]:
 		"""
@@ -192,26 +194,45 @@ class Ppu:
 		return y, x
 
 	def tick_until_ppustatus_change(self) -> None:
-		logger.debug('Waiting for next PPUSTATUS change')
-		# Tick clock until next PPUSTATUS change
-		ppustatus = self.ppustatus
+		"""
+		Tick clock until next PPUSTATUS change and/or start or end of VBLANK
 
-		# TODO: store which rows we've skipped, to display for debugging
+		Although CPU doesn't need to care about VBLANK changes that don't change PPUSTATUS (i.e. end after flag has been
+		cleared, or start in rare hardware corner case), the main outer emulator loop needs at least 1 CPU tick to
+		happen after start and after end of VBLANK
+		"""
 
+		logger.debug('Waiting for next PPUSTATUS or VBLANK change')
+
+		ppustatus_was = self.ppustatus
+		vblank_was = self.vblank
 		row_start = self.row
 
-		# TODO optimization: Instead of ticking 1 row at a time, calculate when the next PPUSTATUS change will happen
-		# and jump straight there (although with the way tick_clock works right now, this might not be that much of an
-		# optimization)
-		while self.ppustatus == ppustatus:
+		# Tick ahead to end of this line
+		# This also prevents self._col from overflowing on an odd frame
+		columns_remaining = COLUMNS - self.col
+		assert columns_remaining >= 0
+		self._tick_clock(columns_remaining)
+		assert self.col <= 1  # Usually 0, but can be 1 on row 0 due to odd frame behavior
+		assert self.row != row_start
+
+		# TODO optimization: Calculate when the next PPUSTATUS change will happen and tick straight there instead of
+		# 1 row at a time
+
+		while self.vblank == vblank_was and self.ppustatus == ppustatus_was:
 			# Tick ahead 1 row
-			self._tick_clock(COLUMNS)
+			# Optimization: skip going through self._tick_clock(COLUMNS) or incrementing self._col
+			self._finish_row()
+			# Note that _finish_row() can increment self.col by 1 on odd frame, but overflow should not be possible here
+			# due to _tick_clock(columns_remaining) aboive
+			assert self.col <= 1
 
 		row_end = self.row
 
-		assert row_end != row_start
-
-		if row_end >= row_start:
+		if row_end == row_start:
+			# Slept an entire frame (except for a few columns) - this often happens right on startup
+			self.debug_status_im[:, 2] = 255
+		elif row_end > row_start:
 			self.debug_status_im[row_start:row_end, 2] = 255
 		else:
 			self.debug_status_im[row_start:, 2] = 255
@@ -220,6 +241,7 @@ class Ppu:
 	def _vblank_start(self):
 		# Set vblank
 		self.ppustatus |= 0b1000_0000
+		self.vblank = True
 		if self.vblank_nmi_enable:
 			logger.debug(f'Frame {self.frame_count} VBLANK start (NMI enabled)')
 			self.nmi = True
@@ -233,6 +255,7 @@ class Ppu:
 		# Disable vblank, sprite0, overflow
 		logger.debug('VBLANK end')
 		self.ppustatus = 0
+		self.vblank = False
 		self.nmi = False
 
 		if self.vblank_end_callback:
@@ -254,8 +277,11 @@ class Ppu:
 				return self.ppumask
 			case 0x2002:
 				# PPUSTATUS
+				ret = self.ppustatus
+				# Reading PPUSTATUS clears vblank bit
+				self.ppustatus &= 0b0111_1111
 				self.write_latch = False
-				return self.ppustatus
+				return ret
 			case 0x2007:
 				# PPUDATA
 				ret = self.ppudata_read_buffer

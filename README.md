@@ -26,15 +26,13 @@ Working or mostly-working:
 
 Major problems:
 
-- **Super Mario Bros**: The ground is 2 tiles higher than it's supposed to be. Everything else appears to run, but it's unplayable since Mario is stuck in the ground.
+- **Super Mario Bros**: The ground is 3 tiles higher than it's supposed to be. Everything else appears to run, but it's unplayable since Mario is stuck in the ground.
 - **Excitebike**: Gets stuck on the title screen, because of a bug where pressing the start button behaves as select/down instead, so you can't start the game (up also has this same problem)
-- **Bomberman**: Title screen works, but gets stuck on one of the first frames of the game. Usually the time gets stuck at 200, but sometimes 199. Likely something to do with PPUSTATUS VBLANK flag not getting cleared on read.
+- **Bomberman**: Freezes on title screen. Oddly, it used to get further than this (but got stuck after starting the game), when VBLANK wasn't being cleared on PPUSTATUS read.
 - **Galaga**: Doesn't work because 8x16 sprites are not yet supported
 
 PPU & rendering issues:
 
-- VBLANK flag is not cleared on read
-	- Although this is a simple fix, fixing it breaks "sleep CPU until next PPUSTATUS change" optimization for some unclear reason
 - PPUSCROLL & PPUADDR sharing internal registers is not handled correctly
 - Sprite 0 hit is only partially implemented:
 	- It works if you assume no background pixels are transparent
@@ -58,6 +56,8 @@ Next goals:
 
 Lower priority stuff:
 
+- Always make any pressed button last for at least 1 frame
+	- Even though a real NES wouldn't behave this way, we usually run a lot slower than 60 FPS, so short button presses can be missed entirely
 - Player 2 controller support
 - PC gamepad support
 
