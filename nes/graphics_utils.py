@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 
+import logging
 from pathlib import Path
 
 import pygame
 
 import numpy as np
+
+
+logger = logging.getLogger(__name__)
 
 
 def grey_to_rgb(arr: np.ndarray) -> np.ndarray:
@@ -112,17 +116,34 @@ def chr_to_stacked(rom_chr: bytes) -> np.ndarray:
 def load_palette_file(path: Path | str) -> np.ndarray:
 	data = Path(path).read_bytes()
 
-	# TODO: include emphasis bits (data past 192)
+	if len(data) < 192:
+		raise ValueError(f'Invalid palette file - expected length >= 192, actual length {len(data)}')
 
-	if True:
-		# Fast numpy code
-		palette = np.frombuffer(data[:192], dtype=np.uint8).reshape((64, 3))
+	if len(data) >= 1536:
+
+		if len(data) > 1536:
+			logger.warning(f'Unexpected palette file length: {len(data)}, truncating to 1536')
+
+		palettes = np.frombuffer(data[:1536], dtype=np.uint8).reshape((8, 64, 3))
+
 	else:
-		# Slow iterative code
-		palette = np.empty((64, 3), dtype=np.uint8)
-		for idx in range(64):
-			palette[idx, 0] = data[3 * idx]
-			palette[idx, 1] = data[3 * idx + 1]
-			palette[idx, 2] = data[3 * idx + 2]
+		# TODO: Generate emphasis palettes (de-gamma, multiply by 0.816328, and re-gamma)
+		# https://www.nesdev.org/wiki/NTSC_video#Color_Tint_Bits
+		logger.warning('Palette file does not contain emphasis palettes, PPU emphasis will not be supported')
 
-	return palette
+		if True:
+			# Fast numpy code
+			palette = np.frombuffer(data[:192], dtype=np.uint8).reshape((8, 64, 3))
+		else:
+			# Original slow iterative code
+			palette = np.empty((64, 3), dtype=np.uint8)
+			for idx in range(64):
+				palette[idx, 0] = data[3 * idx]
+				palette[idx, 1] = data[3 * idx + 1]
+				palette[idx, 2] = data[3 * idx + 2]
+
+		palettes = np.stack([palette] * 8, axis=0)
+	
+	assert palettes.shape == (8, 64, 3), f'{palettes.shape=}'
+
+	return palettes

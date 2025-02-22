@@ -10,10 +10,9 @@ from nes.rom import INesHeader
 from nes.graphics_utils import chr_to_array, chr_to_stacked, grey_to_rgb, load_palette_file, draw_rectangle
 from nes.types import uint8, pointer16
 
-
 # From https://www.nesdev.org/wiki/File:2C02G_wiki.pal
-NES_PALETTE: Final[np.ndarray] = load_palette_file(Path(__file__).parent / '2C02G_wiki.pal')
-
+NES_PALETTES: Final[np.ndarray] = load_palette_file(Path(__file__).parent / '2C02G_wiki.pal')
+NES_PALETTE_MAIN: Final[np.ndarray] = NES_PALETTES[0]
 
 LUT_2BIT_TO_8BIT: Final[np.ndarray] = np.array([0, 256//3, 512//3, 255], dtype=np.uint8)
 
@@ -115,7 +114,7 @@ class Renderer:
 		self._sprites_debug_im = np.zeros((64, 64, 3), dtype=np.uint8)
 
 		self._full_palette_debug_im = np.arange(64, dtype=np.uint8).reshape((4, 16))
-		self._full_palette_debug_im = NES_PALETTE[self._full_palette_debug_im]
+		self._full_palette_debug_im = NES_PALETTE_MAIN[self._full_palette_debug_im]
 		assert self._full_palette_debug_im.shape == (4, 16, 3)
 
 		self._current_palette_debug_im = np.zeros((2, 16, 3), dtype=np.uint8)
@@ -246,7 +245,7 @@ class Renderer:
 		self._nametables_indexed = nametables_indexed
 
 		# Palettize
-		self._nametable_debug_im = NES_PALETTE[self._nametables_indexed]
+		self._nametable_debug_im = NES_PALETTE_MAIN[self._nametables_indexed]
 
 	def _render_sprites(
 			self,
@@ -318,13 +317,13 @@ class Renderer:
 		self._sprite_layer_indexed = sprites_indexed
 
 		sprites_debug_indexed[sprites_debug_indexed >= 64] = 0
-		self._sprites_debug_im = NES_PALETTE[sprites_debug_indexed]
+		self._sprites_debug_im = NES_PALETTE_MAIN[sprites_debug_indexed]
 
 		sprites_im = sprites_indexed.copy()
 		sprite_im_bg = sprites_im >= 64
 		sprites_im[sprite_im_bg] = 0x0F
 		sprites_im[:240, :256][sprite_im_bg[:240, :256]] = 0
-		sprites_im = NES_PALETTE[sprites_im]
+		sprites_im = NES_PALETTE_MAIN[sprites_im]
 
 		sprites_im[np.logical_and(outline_mask, sprite_im_bg), ...] = (255, 0, 255)
 
@@ -342,7 +341,7 @@ class Renderer:
 
 		# Make palette image before applying background colors
 		palette_ram_idxs = palettes.reshape((2, 16))
-		self._current_palette_debug_im = NES_PALETTE[palette_ram_idxs]
+		self._current_palette_debug_im = NES_PALETTE_MAIN[palette_ram_idxs]
 		assert self._current_palette_debug_im.shape == (2, 16, 3)
 
 		bg_palettes = palettes[:4, :]
@@ -366,9 +365,8 @@ class Renderer:
 		scroll_y = ppu.scroll_y
 
 		ppumask = ppu.ppumask
-		emphasize_blue =        bool(ppumask & 0b1000_0000)
-		emphasize_green =       bool(ppumask & 0b0100_0000)
-		emphasize_red =         bool(ppumask & 0b0010_0000)
+		emphasis =                  (ppumask & 0b1110_0000) >> 5
+		assert 0 <= emphasis < 8, f'{emphasis=}'
 		# We could return early if rendering disabled, but then debug images would not get made
 		render_sprites =        bool(ppumask & 0b0001_0000)
 		render_bg =             bool(ppumask & 0b0000_1000)
@@ -418,16 +416,8 @@ class Renderer:
 			frame_indexed &= 0x30
 
 		# Apply NES palette (6-bit -> 8-bit RGB)
-		self._frame_im = NES_PALETTE[frame_indexed]
-
-		# Hacky way of doing RGB emphasis (TODO: do it properly)
-		if emphasize_red:
-			self._frame_im[..., 1:] //= 2
-		if emphasize_blue:
-			self._frame_im[..., :2] //= 2
-		if emphasize_green:
-			self._frame_im[..., 0] //= 2
-			self._frame_im[..., 2] //= 2
+		palette = NES_PALETTES[emphasis]
+		self._frame_im = palette[frame_indexed]
 
 		self._ppu_debug_im = ppu.debug_status_im.reshape((ppu.debug_status_im.shape[0], 1, 3)).copy()
 		ppu.done_rendering()
