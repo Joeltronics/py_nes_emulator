@@ -105,12 +105,36 @@ def chr_to_array(rom_chr: bytes, width=16) -> np.ndarray:
 	return chr_arr
 
 
-def chr_to_stacked(rom_chr: bytes) -> np.ndarray:
+def chr_to_stacked(rom_chr: bytes, tall=False) -> np.ndarray:
 	"""
-	:returns CHR as array (2-bit), shape (512, 8, 8)
+	:returns: CHR as array (2-bit), shape (256, 16, 8) if tall, otherwise (512, 8, 8)
+
+	:note: if tall, order will be corrected for OAM bit order when in 8x16 mode, i.e. resulting array directly takes
+	OAM byte 1 as index
 	"""
+
 	# TODO optimization: I suspect (512, 8, 8) is faster than (8, 8, 512), but confirm (try both and compare performance)
-	return chr_to_array(rom_chr, width=1).reshape((512, 8, 8))
+	tiles_8x8 = chr_to_array(rom_chr, width=1).reshape((512, 8, 8)).copy()
+
+	if tall:
+		# Could numpy optimize this, but it only happens on load, so not a high priority
+		tiles_8x16 = np.empty((256, 16, 8), dtype=np.uint8)
+
+		for idx_out in range(256):
+			# In 8x16 mode, there's some bit shuffling needed to get tile index
+			# https://www.nesdev.org/wiki/PPU_OAM#Byte_1
+			# Do it once now rather than every time we render a sprite later
+			low_bit = (idx_out & 1)
+			high_bits = idx_out & 0b1111_1110
+			idx_in = 256 * low_bit + high_bits
+
+			tiles_8x16[idx_out, :8, :] = tiles_8x8[idx_in    , :, :]
+			tiles_8x16[idx_out, 8:, :] = tiles_8x8[idx_in + 1, :, :]
+
+		return tiles_8x16
+
+	else:
+		return tiles_8x8
 
 
 def load_palette_file(path: Path | str) -> np.ndarray:

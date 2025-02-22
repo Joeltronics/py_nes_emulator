@@ -100,7 +100,8 @@ class Renderer:
 
 		self._frame_im = np.zeros((240, 256, 3), dtype=np.uint8)
 
-		self._chr_tiles = chr_to_stacked(self._rom_chr)
+		self._chr_tiles_8x8 = chr_to_stacked(self._rom_chr)
+		self._chr_tiles_8x16 = chr_to_stacked(self._rom_chr, tall=True)
 
 		# TODO: for 8x16 games, it could be better to display CHR in the equivalent order
 		self._chr_im_2bit = chr_to_array(self._rom_chr, width=16)
@@ -220,14 +221,14 @@ class Renderer:
 		# Copy tiles from CHR
 
 		# TODO: see if this can be numpy optimized
-		# nametable_a_tiles = self._chr_tiles[nametable_a_tileidx]
-		# nametable_b_tiles = self._chr_tiles[nametable_b_tileidx]
+		# nametable_a_tiles = self._chr_tiles_8x8[nametable_a_tileidx]
+		# nametable_b_tiles = self._chr_tiles_8x8[nametable_b_tileidx]
 		# print(f'{nametable_a_tiles.shape=}')
 		# exit(1)
 
 		nametable_a_2bit = np.empty((240, 256), dtype=np.uint8)
 		nametable_b_2bit = np.empty((240, 256), dtype=np.uint8)
-		tiles = self._chr_tiles  # Optimization: avoid self.__getattr__() inside loop
+		tiles = self._chr_tiles_8x8  # Optimization: avoid self.__getattr__() inside loop
 		for y8 in range(240 // 8):
 			y = y8 * 8
 			for x8 in range(256 // 8):
@@ -289,16 +290,10 @@ class Renderer:
 			priority = bool(flags & 0b0010_0000)  # TODO: support sprite background priority (store a mask for it)
 			palette_idx = flags & 0x03
 
-			tile2 = None
 			if sprites_8x16:
-				tile_idx_offset_8x16 = 256 * (tile_idx & 1)
-				tile_idx &= 0b1111_1110
-				# TODO optimization: pre-calculate 8x16 tiles in constructor
-				tile = np.vstack((
-					self._chr_tiles[tile_idx + tile_idx_offset_8x16],
-					self._chr_tiles[tile_idx + tile_idx_offset_8x16 + 1]))
+				tile = self._chr_tiles_8x16[tile_idx]
 			else:
-				tile = self._chr_tiles[tile_idx + tile_idx_offset_8x8]
+				tile = self._chr_tiles_8x8[tile_idx + tile_idx_offset_8x8]
 
 			if flip_v:
 				tile = np.flipud(tile)

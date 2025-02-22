@@ -40,7 +40,8 @@ class Ppu:
 
 		self.rom_chr: Final[bytes] = rom_chr
 
-		self._chr_tiles_mask = chr_to_stacked(self.rom_chr) > 0
+		self._chr_tiles_8x8_mask = chr_to_stacked(self.rom_chr) > 0
+		self._chr_tiles_8x16_mask = chr_to_stacked(self.rom_chr, tall=True) > 0
 
 		self.nametable_layout: Final[tuple[int, int, int, int]] = (
 			NAMETABLE_LAYOUT_VERTICAL if rom_header.vertical_mirroring else NAMETABLE_LAYOUT_HORIZONTAL
@@ -148,8 +149,6 @@ class Ppu:
 		:returns: (y, x); if sprite zero never gets hit, then returns out of bounds coordinate (SPRITE_ZERO_HIT_NONE)
 		"""
 
-		sprites_8x16 = bool(self.ppuctrl & 0b0010_0000)
-
 		# TODO: PPUMASK bits 1 or 2 (which disable left 8 pixels)
 
 		# If sprite or BG rendering is disabled, we do not hit
@@ -164,18 +163,12 @@ class Ppu:
 		sprite_flags = self.oam[2]
 		sprite_x = self.oam[3]
 
-		if sprites_8x16:
-			sprite_tile_idx_offset_8x16 = 256 * (sprite_tile_idx & 1)
-			sprite_tile_idx &= 0b1111_1110
-			sprite_tile_idx += sprite_tile_idx_offset_8x16
-			# TODO optimization: pre-calculate 8x16 tiles in constructor
-			tile = np.vstack((
-				self._chr_tiles_mask[sprite_tile_idx],
-				self._chr_tiles_mask[sprite_tile_idx + 1]))
+		if self.ppuctrl & 0b0010_0000:
+			# 8x16 sprites
+			tile = self._chr_tiles_8x16_mask[sprite_tile_idx]
 		else:
-			sprite_pattern_table_select = bool(self.ppuctrl & 0b0000_1000)
-			sprite_tile_idx_offset_8x8 = 256 if sprite_pattern_table_select else 0
-			tile = self._chr_tiles_mask[sprite_tile_idx + sprite_tile_idx_offset_8x8]
+			sprite_tile_idx_offset_8x8 = 256 if (self.ppuctrl & 0b0000_1000) else 0
+			tile = self._chr_tiles_8x8_mask[sprite_tile_idx + sprite_tile_idx_offset_8x8]
 
 		if sprite_flags & 0b1000_0000:
 			tile = np.flipud(tile)
