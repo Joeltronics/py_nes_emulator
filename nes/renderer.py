@@ -102,14 +102,15 @@ class Renderer:
 
 		self._chr_tiles = chr_to_stacked(self._rom_chr)
 
+		# TODO: for 8x16 games, it could be better to display CHR in the equivalent order
 		self._chr_im_2bit = chr_to_array(self._rom_chr, width=16)
 		self._chr_im = grey_to_rgb(LUT_2BIT_TO_8BIT[self._chr_im_2bit])
 
 		self._nametables_indexed = np.zeros((480, 512), dtype=np.uint8)
 		self._nametable_debug_im = np.zeros((480, 512, 3), dtype=np.uint8)
 
-		self._sprite_layer_indexed = np.zeros((256 + 8, 256 + 7), dtype=np.uint8)
-		self._sprite_layer_debug_im = np.zeros((256 + 8, 256 + 7, 3), dtype=np.uint8)
+		self._sprite_layer_indexed = np.zeros((256 + 16, 256 + 7), dtype=np.uint8)
+		self._sprite_layer_debug_im = np.zeros((256 + 16, 256 + 7, 3), dtype=np.uint8)
 
 		self._sprites_debug_im = np.zeros((64, 64, 3), dtype=np.uint8)
 
@@ -258,16 +259,14 @@ class Renderer:
 		ppuctrl = self._ppu.ppuctrl
 
 		sprites_8x16 = bool(ppuctrl & 0b0010_0000)
+		h = 16 if sprites_8x16 else 8
 
 		sprite_pattern_table_select = bool(ppuctrl & 0b0000_1000)
-		tile_idx_offset = 256 if sprite_pattern_table_select else 0
-
-		if sprites_8x16:
-			raise NotImplementedError('8x16 sprites are not yet supported')
+		tile_idx_offset_8x8 = 256 if sprite_pattern_table_select else 0
 
 		# These arrays will include sprites that are off-screen too, hence why shape isn't (240, 256)
 		# Value 255 indicates a transparent pixel
-		sprites_indexed = np.full((256 + 8, 256 + 7), fill_value=255, dtype=np.uint8)
+		sprites_indexed = np.full((256 + 16, 256 + 7), fill_value=255, dtype=np.uint8)
 
 		sprites_debug_indexed = np.zeros((64, 64), dtype=np.uint8)
 
@@ -285,14 +284,21 @@ class Renderer:
 			if y >= 240 and not render_offscreen_sprites:
 				continue
 
-			tile_idx += tile_idx_offset
-
 			flip_v = bool(flags & 0b1000_0000)
 			flip_h = bool(flags & 0b0100_0000)
 			priority = bool(flags & 0b0010_0000)  # TODO: support sprite background priority (store a mask for it)
 			palette_idx = flags & 0x03
 
-			tile = self._chr_tiles[tile_idx]
+			tile2 = None
+			if sprites_8x16:
+				tile_idx_offset_8x16 = 256 * (tile_idx & 1)
+				tile_idx &= 0b1111_1110
+				# TODO optimization: pre-calculate 8x16 tiles in constructor
+				tile = np.vstack((
+					self._chr_tiles[tile_idx + tile_idx_offset_8x16],
+					self._chr_tiles[tile_idx + tile_idx_offset_8x16 + 1]))
+			else:
+				tile = self._chr_tiles[tile_idx + tile_idx_offset_8x8]
 
 			if flip_v:
 				tile = np.flipud(tile)
@@ -301,18 +307,18 @@ class Renderer:
 				tile = np.fliplr(tile)
 
 			tile_palettized = sprite_palettes[palette_idx, ...][tile]
-
 			tile_mask = tile > 0
-			sprites_indexed[y : y + 8, x : x + 8][tile_mask] = tile_palettized[tile_mask]
+			sprites_indexed[y : y + h, x : x + 8][tile_mask] = tile_palettized[tile_mask]
 
-			# TODO: different color depending on sprite flags, and also for sprite 0
+			# TODO: different color depending on sprite flags, a bit like for sprite 0
 			# (need to make outline_mask RGB instead of bool)
-			draw_rectangle(outline_mask, True, x, y, 8, 8)
+			draw_rectangle(outline_mask, True, x, y, 8, h)
 
 			ys, xs = divmod(sprite_idx, 8)
 			xs *= 8
 			ys *= 8
-			sprites_debug_indexed[ys : ys + 8, xs : xs + 8] = tile_palettized
+			# If 8x16, will only put top sprite into _sprites_debug_im (TODO: both)
+			sprites_debug_indexed[ys : ys + 8, xs : xs + 8] = tile_palettized[:8, ...]
 
 		self._sprite_layer_indexed = sprites_indexed
 
@@ -328,7 +334,7 @@ class Renderer:
 		sprites_im[np.logical_and(outline_mask, sprite_im_bg), ...] = (255, 0, 255)
 
 		# Special outline for sprite 0
-		draw_rectangle(sprites_im, (0, 255, 0), oam[3], oam[0] + 1, 8, 8)
+		draw_rectangle(sprites_im, (0, 255, 0), oam[3], oam[0] + 1, 8, 16 if sprites_8x16 else 8)
 
 		self._sprite_layer_debug_im = sprites_im
 

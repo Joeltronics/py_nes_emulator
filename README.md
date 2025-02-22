@@ -21,6 +21,7 @@ Working or mostly-working:
 
 - **Donkey Kong**
 - **Ice Climber**
+- **Galaga**
 - **Balloon Fight**: works, but in Balloon Trip mode, the score scrolls with the level since we don't support split-screen rendering yet
 - **Ice Hockey**: works, but the title screen doesn't render properly (expected, due to some unimplemented PPU features)
 
@@ -29,7 +30,6 @@ Major problems:
 - **Super Mario Bros**: The ground is 3 tiles higher than it's supposed to be. Everything else appears to run, but it's unplayable since Mario is stuck in the ground.
 - **Excitebike**: Gets stuck on the title screen, because of a bug where pressing the start button behaves as select/down instead, so you can't start the game (up also has this same problem)
 - **Bomberman**: Freezes on title screen. Oddly, it used to get further than this (but got stuck after starting the game), when VBLANK wasn't being cleared on PPUSTATUS read.
-- **Galaga**: Doesn't work because 8x16 sprites are not yet supported
 
 PPU & rendering issues:
 
@@ -38,13 +38,13 @@ PPU & rendering issues:
 	- It works if you assume no background pixels are transparent
 	- It does not factor in some of the weird quirks
 	- It's only line-accurate, not cycle-accurate
+	- Does not properly account for PPUMASK left 8 pixels flags
 - Background priority isn't implemented
 - Right now we only render once at the start of VBLANK, so mid-frame updates won't work
 - We don't limit to max 8 sprites per line
 	- This might sound like a limit we don't want, but some games actually use this intentionally (like doors in The Legend of Zelda)
 	- Sprite overflow flag is not set either (which some games might depend on)
 - Exact behavior when updating PPU outside of VBLANK is not fully emulated
-- 8x16 sprites are not yet supported
 
 Next goals:
 
