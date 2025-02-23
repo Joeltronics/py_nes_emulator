@@ -7,7 +7,7 @@ My main goal is to get this to the point where it can emulate Super Mario Bros -
 
 ### Probably Out of scope
 
-**Being optimized enough to actually play games in real-time.** Performance is better than I expected it would be, and I'm able to emulate games at 20-30 FPS. But still, this is Python - it's not really intended for emulating a few million CPU & PPU instructions per second. It would probably possible with some aggressive optimization, but at the expense of readability, maintainability, and "pythonic"-ness.
+**Being optimized enough to actually play games in real-time.** Performance is better than I expected it would be, and I'm able to emulate games at 20-30 FPS. But still, this is Python - it's not really intended for emulating a few million CPU & PPU instructions per second, and as such its bytecode is not really optimized (`-O` helps a little bit, but not nearly enough). It would probably possible with some aggressive optimization, but at the expense of readability, maintainability, and "pythonic"-ness. I may try Cython, PyPy, or Numba and see if any of these help, but it's not worth it if they affect the code too much or don't play nice with dependencies.
 
 **Perfect emulation.** For example, precise cycle accuracy, hardware quirks like open-bus behavior, or pixel-exact PPU emulation. I do expect to support some of the most common quirks that many games rely on, but definitely not Battletoads-level accuracy.
 
@@ -19,42 +19,43 @@ There's basic emulation, but no APU or mapper support.
 
 Working or mostly-working:
 
+- **nestest.nes**: all "normal" opcode tests pass
 - **Donkey Kong**
 - **Ice Climber**
 - **Galaga**
 - **Balloon Fight**: works, but in Balloon Trip mode, the score scrolls with the level since we don't support split-screen rendering yet
 - **Ice Hockey**: works, but the title screen doesn't render properly (expected, due to some unimplemented PPU features)
+- **Super Mario Bros**: works, but score scrolls with the level, and has rendering issues due to lack of background priority support
 
 Major problems:
 
-- **Super Mario Bros**: The ground is 3 tiles higher than it's supposed to be. Everything else appears to run, but it's unplayable since Mario is stuck in the ground.
-- **Excitebike**: Gets stuck on the title screen, because of a bug where pressing the start button behaves as select/down instead, so you can't start the game (up also has this same problem)
+- **Excitebike**: works, but lack of split-screen rendering makes it completely unplayable, as the level does not scroll
 - **Bomberman**: Freezes on title screen. Oddly, it used to get further than this (but got stuck after starting the game), when VBLANK wasn't being cleared on PPUSTATUS read.
 
 PPU & rendering issues:
 
-- PPUSCROLL & PPUADDR sharing internal registers is not handled correctly
-- Sprite 0 hit is only partially implemented:
-	- It works if you assume no background pixels are transparent
-	- It does not factor in some of the weird quirks
-	- It's only line-accurate, not cycle-accurate
-	- Does not properly account for PPUMASK "left 8 pixels" flags
 - Background priority isn't implemented
 - Right now we only render once at the start of VBLANK, so mid-frame updates won't work
 - We don't limit to max 8 sprites per line
 	- This might sound like a limit we don't want, but some games actually use this intentionally (like doors in The Legend of Zelda)
 	- Sprite overflow flag is not set either, though thankfully there's only 1 commercial game listed on the nesdev wiki that depends on this, because of a hardware bug that makes the behavior unreliable in many cases
 	- See https://www.nesdev.org/wiki/Sprite_overflow_games
+- Sprite 0 hit is only partially implemented:
+	- It works if you assume no background pixels are transparent
+	- It does not factor in some of the weird quirks
+	- It's only line-accurate, not cycle-accurate
+	- Does not properly account for PPUMASK "left 8 pixels" flags
+- PPUSCROLL & PPUADDR sharing internal registers is not handled correctly
 - Exact behavior when updating PPU outside of VBLANK is not fully emulated
 
 Next goals:
 
 - PPU background priority
-- Fix games that aren't working
 - Split-screen rendering, to support mid-frame updates
 - Code cleanups
 - Other PPU features & behaviors
 - Basic APU emulation (without actually playing audio yet - just show audio channel info on-screen)
+- Fix games that aren't working, and try more games
 
 Lower priority stuff:
 

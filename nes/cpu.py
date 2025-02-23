@@ -231,8 +231,9 @@ class Cpu:
 			return self.rom_prg[(addr - 0x8000) % len(self.rom_prg)]
 
 	def read16(self, addr: pointer16) -> uint8:
+		assert 0 <= addr < 65536
 		low = self.read(addr)
-		high = self.read(addr + 1)
+		high = self.read((addr + 1) & 0xFFFF)
 		return (high << 8) + low
 
 	def write(self, addr: pointer16, val: uint8) -> None:
@@ -352,7 +353,7 @@ class Cpu:
 		ret = self.read(self.pc)
 		self.pc += 1
 		ret = _signed(ret)
-		self._addr_instr_log = f'{ret}'
+		self._addr_instr_log = str(ret)
 		return ret
 
 	def _addr_immediate(self) -> uint8:
@@ -389,9 +390,8 @@ class Cpu:
 		"""
 		addr = self.read(self.pc)
 		self._addr_instr_log = f'${addr:02X},X'
-		addr = (addr + self.x) & 0xFF
 		self.pc += 1
-		return addr
+		return (addr + self.x) & 0xFF
 
 	def _addr_zeropage_x_val(self) -> uint8:
 		"""
@@ -407,9 +407,8 @@ class Cpu:
 		"""
 		addr = self.read(self.pc)
 		self._addr_instr_log = f'${addr:02X},Y'
-		addr = (addr + self.y) & 0xFF
 		self.pc += 1
-		return addr
+		return (addr + self.y) & 0xFF
 
 	def _addr_zeropage_y_val(self) -> uint8:
 		"""
@@ -443,9 +442,8 @@ class Cpu:
 		# TODO: 1 extra cycle if crossing page boundary
 		addr = self.read16(self.pc)
 		self._addr_instr_log = f'${addr:04X},X'
-		addr += self.x
 		self.pc += 2
-		return addr
+		return (addr + self.x) & 0xFFFF
 
 	def _addr_absolute_x_val(self) -> uint8:
 		"""
@@ -462,9 +460,8 @@ class Cpu:
 		# TODO: 1 extra cycle if crossing page boundary
 		addr = self.read16(self.pc)
 		self._addr_instr_log = f'${addr:04X},Y'
-		addr += self.y
 		self.pc += 2
-		return addr
+		return (addr + self.y) & 0xFFFF
 
 	def _addr_absolute_y_val(self) -> uint8:
 		"""
@@ -479,11 +476,15 @@ class Cpu:
 		:returns: value
 		"""
 		# JMP is the only instruction that uses this mode
-		# TODO: emulate CPU bug if addr ends with 0xFF
 		addr = self.read16(self.pc)
 		self._addr_instr_log = f'(${addr:04X})'
 		self.pc += 2
-		return self.read16(addr)
+
+		# 6502 has page wraparound bug when address ends with 0xFF
+		# https://www.nesdev.org/wiki/Instruction_reference#JMP
+		page = (addr & 0xFF00)
+		addr_high = page + ((addr + 1) & 0xFF)
+		return (self.read(addr_high) << 8) + self.read(addr)
 
 	def _addr_indirect_x_addr(self) -> pointer16:
 		"""
@@ -491,12 +492,13 @@ class Cpu:
 		:returns: address
 		"""
 		zp_addr = self.read(self.pc)
-		self._addr_instr_log = f'(${zp_addr:02X},X)'
-		zp_addr = (zp_addr + self.x) & 0xFF
 		self.pc += 1
-		# TODO optimization: can skip read16 and go directly to ram
-		addr = self.read16(zp_addr)
-		return addr
+		self._addr_instr_log = f'(${zp_addr:02X},X)'
+		# Optimization: skip read16() and go directly to ram
+		# Also, read16 would not work properly anyway when the +1 wraps the zero-page boundary
+		low = self.ram[(zp_addr + self.x) & 0xFF]
+		high = self.ram[(zp_addr + self.x + 1) & 0xFF]
+		return (high << 8) + low
 
 	def _addr_indirect_x_val(self) -> uint8:
 		"""
@@ -512,10 +514,12 @@ class Cpu:
 		"""
 		# TODO: 1 extra cycle if crossing page boundary
 		zp_addr = self.read(self.pc)
-		self._addr_instr_log = f'(${zp_addr:02X}),Y'
 		self.pc += 1
-		addr = self.read16(zp_addr) + self.y
-		return addr
+		self._addr_instr_log = f'(${zp_addr:02X}),Y'
+		# Optimization: as with indirect_x, skip read16() and go directly to ram
+		low = self.ram[zp_addr]
+		high = self.ram[(zp_addr + 1) & 0xFF]
+		return ((high << 8) + low + self.y) & 0xFFFF
 
 	def _addr_indirect_y_val(self) -> uint8:
 		"""
@@ -750,11 +754,13 @@ class Cpu:
 				instr_log = 'BIT'
 				if opcode == 0x24:
 					cycles = 3
-					result = self._addr_zeropage_val()
+					value = self._addr_zeropage_val()
 				else:
 					cycles = 4
-					result = self._addr_absolute_val()
-				self.v = bool(result & 0b0100_0000)
+					value = self._addr_absolute_val()
+				self.v = bool(value & 0b0100_0000)
+				self.n = bool(value & 0b1000_0000)
+				self.z = (self.a & value) == 0
 
 			case 0x30:
 				# BMI rel
@@ -1029,6 +1035,7 @@ class Cpu:
 				instr_log = 'JMP'
 				cycles = 5
 				self.pc = self._addr_indirect()
+				assert 0 <= self.pc <= 0xFFFF
 
 			case 0x20:
 				# JSR
@@ -1317,10 +1324,12 @@ class Cpu:
 					case 0xF1:
 						cycles = 5
 						value = self._addr_indirect_y_val()
-				result = self.a + (~value) + int(self.c)				
-				self.c = result >= 0
-				self.v = bool((result ^ self.a) & (result ^ value) & 0x80)
-				self.a = result = (result % 256)
+				nvalue = (~value) & 0xFF
+				result = self.a + nvalue + int(self.c)
+				self.c = result >= 256
+				result %= 256
+				self.v = bool((result ^ self.a) & (result ^ nvalue) & 0x80)
+				self.a = result
 
 			case 0x38:
 				# SEC
@@ -1437,7 +1446,7 @@ class Cpu:
 				# TXS
 				instr_log = 'TXS'
 				cycles = 2
-				result = self.sp = self.x
+				self.sp = self.x
 
 			case 0x98:
 				# TYA
