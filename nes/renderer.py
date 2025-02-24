@@ -121,7 +121,8 @@ class Renderer:
 
 		self._current_palette_debug_im = np.zeros((2, 16, 3), dtype=np.uint8)
 
-		self._ppu_debug_im = None
+		self._ppu_debug_im = ppu.debug_status_im.reshape((ppu.debug_status_im.shape[0], 1, 3)).copy()
+		self._sprite_zero_debug_im = ppu.sprite_zero_debug_im.copy()
 
 		if save_chr:
 			_save_chr(self._chr_im)
@@ -153,8 +154,11 @@ class Renderer:
 	def get_full_palette_debug_im(self) -> np.ndarray:
 		return self._full_palette_debug_im
 
-	def get_ppu_debug_im(self) -> np.ndarray | None:
+	def get_ppu_debug_im(self) -> np.ndarray:
 		return self._ppu_debug_im
+
+	def get_sprite_zero_debug_im(self) -> np.ndarray:
+		return self._sprite_zero_debug_im
 
 	def _mirror(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
@@ -421,4 +425,5 @@ class Renderer:
 		self._frame_im = palette[frame_indexed]
 
 		self._ppu_debug_im = ppu.debug_status_im.reshape((ppu.debug_status_im.shape[0], 1, 3)).copy()
+		self._sprite_zero_debug_im = ppu.sprite_zero_debug_im.copy()
 		ppu.done_rendering()

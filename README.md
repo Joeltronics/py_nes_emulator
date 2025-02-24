@@ -40,11 +40,7 @@ PPU & rendering issues:
 	- This might sound like a limit we don't want, but some games actually use this intentionally (like doors in The Legend of Zelda)
 	- Sprite overflow flag is not set either, though thankfully there's only 1 commercial game listed on the nesdev wiki that depends on this, because of a hardware bug that makes the behavior unreliable in many cases
 	- See https://www.nesdev.org/wiki/Sprite_overflow_games
-- Sprite 0 hit is only partially implemented:
-	- It works if you assume no background pixels are transparent
-	- It does not factor in some of the weird quirks
-	- It's only line-accurate, not cycle-accurate
-	- Does not properly account for PPUMASK "left 8 pixels" flags
+- Sprite 0 hit is only line-accurate, not cycle-accurate
 - PPUSCROLL & PPUADDR sharing internal registers is not handled correctly
 - Exact behavior when updating PPU outside of VBLANK is not fully emulated
 

@@ -43,8 +43,10 @@ class Ppu:
 		self._chr_tiles_8x8_mask = chr_to_stacked(self.rom_chr) > 0
 		self._chr_tiles_8x16_mask = chr_to_stacked(self.rom_chr, tall=True) > 0
 
+		self._vertical_mirroring = rom_header.vertical_mirroring
+
 		self.nametable_layout: Final[tuple[int, int, int, int]] = (
-			NAMETABLE_LAYOUT_VERTICAL if rom_header.vertical_mirroring else NAMETABLE_LAYOUT_HORIZONTAL
+			NAMETABLE_LAYOUT_VERTICAL if self._vertical_mirroring else NAMETABLE_LAYOUT_HORIZONTAL
 		)
 
 		self.vram: Final[bytearray] = bytearray(2048)
@@ -78,10 +80,15 @@ class Ppu:
 		self.vblank_end_callback: Callable[[], None] | None = None
 
 		self.debug_status_im = np.zeros((TOTAL_ROWS, 3), dtype=np.uint8)
+		self.sprite_zero_debug_im = np.zeros((24, 16, 3), dtype=np.uint8)
 
 	@property
 	def vblank_nmi_enable(self) -> bool:
 		return bool(self.ppuctrl & 0b1000_0000)
+
+	@property
+	def sprites_8x16(self) -> bool:
+		return bool(self.ppuctrl & 0b0010_0000)
 
 	@property
 	def sprite_zero_hit(self) -> bool:
@@ -149,53 +156,152 @@ class Ppu:
 		:returns: (y, x); if sprite zero never gets hit, then returns out of bounds coordinate (SPRITE_ZERO_HIT_NONE)
 		"""
 
-		# TODO: PPUMASK bits 1 or 2 (which disable left 8 pixels)
+		self.sprite_zero_debug_im.fill(0)
 
 		# If sprite or BG rendering is disabled, we do not hit
 		if (self.ppumask & 0b0001_1000) != 0b0001_1000:
+			logger.debug('Sprite zero hit: Rendering disabled, no hit')
 			return SPRITE_ZERO_HIT_NONE
+
+		# Load sprite
 
 		sprite_y = self.oam[0] + 1
 		if sprite_y >= 240:
+			logger.debug('Sprite zero hit: sprite zero is out of bounds, no hit')
 			return SPRITE_ZERO_HIT_NONE
 
 		sprite_tile_idx = self.oam[1]
 		sprite_flags = self.oam[2]
 		sprite_x = self.oam[3]
 
-		if self.ppuctrl & 0b0010_0000:
-			# 8x16 sprites
-			tile = self._chr_tiles_8x16_mask[sprite_tile_idx]
+		sprites_8x16 = self.sprites_8x16
+
+		bg_pattern_table_select = bool(self.ppuctrl & 0b0001_0000)
+
+		if sprites_8x16:
+			sprite_tile = self._chr_tiles_8x16_mask[sprite_tile_idx]
 		else:
 			sprite_tile_idx_offset_8x8 = 256 if (self.ppuctrl & 0b0000_1000) else 0
-			tile = self._chr_tiles_8x8_mask[sprite_tile_idx + sprite_tile_idx_offset_8x8]
+			sprite_tile = self._chr_tiles_8x8_mask[sprite_tile_idx + sprite_tile_idx_offset_8x8]
+
+		# If sprite is empty, don't bother with any of the other checks
+		# TODO optimization: precalculate all tiles that are empty
+		if not sprite_tile.any():
+			logger.debug('Sprite zero hit: sprite zero is empty, no hit')
+			return SPRITE_ZERO_HIT_NONE
 
 		if sprite_flags & 0b1000_0000:
-			tile = np.flipud(tile)
+			sprite_tile = np.flipud(sprite_tile)
 
 		if sprite_flags & 0b0100_0000:
-			tile = np.fliplr(tile)
+			sprite_tile = np.fliplr(sprite_tile)
 
-		# TODO: load background tiles around this area, np.logical_and() these two together
-		# scroll_x = self.scroll_x
-		# scroll_y = self.scroll_y
+		# Load background tiles around this area
 
-		# Find first non-zero pixel
+		bg_first_tile_x = (self.scroll_x + sprite_x) // 8
+		bg_first_tile_y = (self.scroll_y + sprite_y) // 8
 
-		if not tile.any():
+		# Align sprite to BG tiles
+		sprite_x_within_region = self.scroll_x + sprite_x - (8 * bg_first_tile_x)
+		sprite_y_within_region = self.scroll_y + sprite_y - (8 * bg_first_tile_y)
+
+		nametable_a = np.frombuffer(self.vram[ : 960], dtype=np.uint8).reshape((30, 32))
+		nametable_b = np.frombuffer(self.vram[ 0x400 : 0x400 + 960 ], dtype=np.uint8).reshape((30, 32))
+
+		bg_region = np.zeros((24 if sprites_8x16 else 16, 16), dtype=np.bool)
+
+		# TODO optimization: if sprite_x_within_region or sprite_y_within_region is 0, can iterate 1 less in that dimension
+		for y in range(3 if sprites_8x16 else 2):
+			tile_y = bg_first_tile_y + y
+			for x in range(2):
+				tile_x = bg_first_tile_x + x
+
+				if self._vertical_mirroring:
+					pick_b = bool(self.ppuctrl & 0b0000_0010)
+					if tile_y >= 30:
+						pick_b = not pick_b
+				else:
+					pick_b = bool(self.ppuctrl & 0b0000_0001)
+					if tile_x >= 32:
+						pick_b = not pick_b
+
+				nametable_tile_y = tile_y % 30
+				nametable_tile_x = tile_x % 32
+				nametable = nametable_b if pick_b else nametable_a
+
+				bg_tile_idx = int(nametable[nametable_tile_y, nametable_tile_x])
+
+				if bg_pattern_table_select:
+					bg_tile_idx += 256
+
+				bg_tile = self._chr_tiles_8x8_mask[bg_tile_idx]
+				bg_region[8*y : 8*y + 8, 8*x : 8*x + 8] = bg_tile
+
+		if not bg_region.any():
+			logging.debug('Sprite zero hit: background region is empty, no hit')
 			return SPRITE_ZERO_HIT_NONE
 
-		tile_y, tile_x = np.unravel_index(np.argmax(tile), tile.shape)
+		self.sprite_zero_debug_im[:bg_region.shape[0], :, 2] = np.where(bg_region, 255, 0)
 
-		x = sprite_x + tile_x
-		y = sprite_y + tile_y
+		self.sprite_zero_debug_im[
+			sprite_y_within_region : sprite_y_within_region + sprite_tile.shape[0],
+			sprite_x_within_region : sprite_x_within_region + 8,
+			0] = np.where(sprite_tile, 255, 0)
 
-		# x=255 does not trigger sprite 0 hit
-		# https://www.nesdev.org/wiki/PPU_OAM#Sprite_0_hits
-		if x >= 255 or y >= 240:
+		# Check where background & sprite overlap
+
+		sprite_tile_overlap = np.logical_and(
+			sprite_tile,
+			bg_region[
+				sprite_y_within_region : sprite_y_within_region + sprite_tile.shape[0],
+				sprite_x_within_region : sprite_x_within_region + 8]
+		)
+
+		# Handle PPUMASK
+
+		hide_leftmost_tile = (self.ppumask & 0b0000_0110) != 0b0000_0110
+		if hide_leftmost_tile:
+			region_start_screen_x = sprite_x - sprite_x_within_region
+			ignore_columns = 8 - region_start_screen_x
+			if ignore_columns > 0:
+				sprite_tile_overlap[:, :ignore_columns] = False
+				self.sprite_zero_debug_im[:, :ignore_columns, :] //= 2
+
+		# Find first non-False pixel (if any)
+
+		y_within_sprite_tile, x_within_sprite_tile = np.unravel_index(
+			# Array is probably already in C-order, but explicitly ravel it to be sure
+			np.argmax(sprite_tile_overlap.ravel(order='C')),
+			sprite_tile_overlap.shape)
+
+		assert 0 <= y_within_sprite_tile < 8 and 0 <= x_within_sprite_tile < 8
+
+		if not sprite_tile_overlap[y_within_sprite_tile, x_within_sprite_tile]:
+			logging.debug(f'Sprite zero hit: sprite at ({sprite_x}, {sprite_y}) does not hit')
 			return SPRITE_ZERO_HIT_NONE
 
-		return y, x
+		# Set this pixel to green
+		self.sprite_zero_debug_im[
+			sprite_y_within_region + y_within_sprite_tile,
+			sprite_x_within_region + x_within_sprite_tile,
+			...] = (0, 255, 0)
+
+		screen_x = sprite_x + x_within_sprite_tile
+		screen_y = sprite_y + y_within_sprite_tile
+
+		if screen_x >= 256 or screen_y >= 240:
+			logger.debug(f'Sprite zero hit: just out of bounds: ({screen_x}, {screen_y}) (part of tile was in bounds), no hit')
+			return SPRITE_ZERO_HIT_NONE
+
+		if screen_x == 255:
+			logger.info(f'Sprite zero hit: hit at (255, {screen_y}), which does not trigger hit (emulating hardware bug)')
+			return SPRITE_ZERO_HIT_NONE
+
+		logger.debug(
+			f'Sprite zero hit: hit at ({screen_x}, {screen_y}); '
+			f'within tile: ({x_within_sprite_tile}, {y_within_sprite_tile})'
+		)
+		return screen_y, screen_x
 
 	def tick_until_ppustatus_change(self) -> None:
 		"""

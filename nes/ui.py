@@ -55,7 +55,8 @@ class Ui:
 		self.sprite_layer_surf = array_to_surface(self.renderer.get_sprite_layer_debug_im())
 		self.sprites_surf = array_to_surface(self.renderer.get_sprites_debug_im(), 2)
 		self.frame_surf = array_to_surface(self.renderer.get_frame_im(), 2)
-		self.ppu_debug_surf = None
+		self.ppu_debug_surf = array_to_surface(self.renderer.get_ppu_debug_im(), (2, 8))
+		self.sprite_zero_debug_surf = array_to_surface(self.renderer.get_sprite_zero_debug_im(), 4)
 
 		pygame.display.set_caption('NES Emulator')
 
@@ -92,11 +93,11 @@ class Ui:
 		array_to_surface(self.renderer.get_frame_im(), 2, into=self.frame_surf)
 		self.screen.blit(self.frame_surf, (128, 0))
 
-		# TODO: space for this
-		ppu_debug_im = self.renderer.get_ppu_debug_im()
-		if ppu_debug_im is not None:
-			self.ppu_debug_surf = array_to_surface(ppu_debug_im, (2, 8), into=self.ppu_debug_surf)
-			self.screen.blit(self.ppu_debug_surf, (128 + 512, 0))
+		array_to_surface(self.renderer.get_ppu_debug_im(), (2, 8), into=self.ppu_debug_surf)
+		self.screen.blit(self.ppu_debug_surf, (128 + 512, 0))
+
+		array_to_surface(self.renderer.get_sprite_zero_debug_im(), 4, into=self.sprite_zero_debug_surf)
+		self.screen.blit(self.sprite_zero_debug_surf, (128 + 512 + 256 + 8 + 8, 480 + 128))
 
 		if fps_str:
 			lines = fps_str.splitlines()
