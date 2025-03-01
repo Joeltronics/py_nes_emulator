@@ -13,6 +13,20 @@ My main goal is to get this to the point where it can emulate Super Mario Bros -
 
 **Audio.** I love audio coding, but Python isn't the right language for real-time audio either (and the purist in me would hate to just your system's built-in MIDI)
 
+### Optimizations
+
+While optimizing this well enough for real-time is out of scope, there are still some optimizations.
+
+The PPU does not run fully independently from the CPU. The CPU runs an instruction, then ticks the PPU by the appropriate number of cycles. So we don't have cycle-exact emulation, but it also means we only need to run the PPU once per CPU instruction. Additionally, many PPU checks only run at the end of a line rather than every pixel, saving us a lot of processing (at the expense of even more cycle-accuracy).
+
+We render an entire frame at once, rather than pixel-by-pixel or row-by-row. This allows us to use vectorized Numpy operations as much as possible. Right now, mid-frame PPU updates do not work because of this (see the list of working games below), but we could still render all rows up to the point where the PPU was updated all together.
+
+Sprite Zero Hit is pre-calculated at the end of VBLANK using Numpy. It is also updated whenever the PPU is updated mid-frame (unless it has already hit).
+
+There are some elements of PPU rendering that could be further optimized - for example, we are rendering all nametable data, even outside the area being shown on-screen. This is useful for debugging, but not the best for performance. Similarly, there are other debug graphics being generated that could be made optional.
+
+Finally, many games spend a lot of CPU time looping, either waiting for an interrupt or else polling PPUSTATUS waiting for it to change. The CPU emulation has logic to detect when this is happening, and instead of continuing to emulate the same few instructions over and over, we sleep the CPU and tell the PPU to skip directly to the next PPUSTATUS change. This gives a huge boost in performance (typically double the FPS). However, this only works on games where nothing happens in the main loop. Some games use this idle time to tick an RNG, and so this logic doesn't work for these games. It could still be possible to sleep the CPU in this case (if you don't need 100% exact RNG behavior - which this emulator isn't anywhere near accurate enough to get in the first place). However, detecting when we're in such a loop is much more complex, so this hasn't been implemented yet.
+
 ### Current status
 
 There's basic emulation, but no APU or mapper support.
@@ -24,18 +38,17 @@ Working or mostly-working:
 - **Ice Climber**
 - **Galaga**
 - **Balloon Fight**: works, but in Balloon Trip mode, the score scrolls with the level since we don't support split-screen rendering yet
-- **Ice Hockey**: works, but the title screen doesn't render properly (expected, due to some unimplemented PPU features)
-- **Super Mario Bros**: works, but score scrolls with the level, and has rendering issues due to lack of background priority support
+- **Ice Hockey**: works, but the title screen doesn't render properly due to lack of split-screen rendering
+- **Super Mario Bros**: works, but score scrolls with the level
 
 Major problems:
 
 - **Excitebike**: works, but lack of split-screen rendering makes it completely unplayable, as the level does not scroll
-- **Bomberman**: Freezes on title screen. Oddly, it used to get further than this (but got stuck after starting the game), when VBLANK wasn't being cleared on PPUSTATUS read.
+- **Bomberman**: Freezes on title screen. Oddly, it used to get further than this (but got stuck after starting the game), when the VBLANK bit wasn't being cleared on PPUSTATUS read.
 
 PPU & rendering issues:
 
-- Background priority isn't implemented
-- Right now we only render once at the start of VBLANK, so mid-frame updates won't work
+- Right now we only render once at the start of VBLANK, so mid-frame updates don't work
 - We don't limit to max 8 sprites per line
 	- This might sound like a limit we don't want, but some games actually use this intentionally (like doors in The Legend of Zelda)
 	- Sprite overflow flag is not set either, though thankfully there's only 1 commercial game listed on the nesdev wiki that depends on this, because of a hardware bug that makes the behavior unreliable in many cases
@@ -46,7 +59,6 @@ PPU & rendering issues:
 
 Next goals:
 
-- PPU background priority
 - Split-screen rendering, to support mid-frame updates
 - Code cleanups
 - Other PPU features & behaviors

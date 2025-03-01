@@ -34,14 +34,13 @@ def _palettize_nametable(
 		palettes: np.ndarray,
 		) -> np.ndarray:
 
-	assert np.amax(palettes) < 64
 	assert np.amax(nametable_chr_2bit) < 4
 
 	# Each byte contains palettes for 4 16x16 metatiles (i.e. covers a 32x32 total area)
 	# https://www.nesdev.org/wiki/PPU_attribute_tables
 	attribute_table = nametable_data[0x3C0:]
 
-	# Initialize to 255 (max valid value is 63), so later we can tell if any pixels were missed
+	# Initialize to 255 to indicate background pixels
 	nametable_indexed = np.full((240, 256), fill_value=255, dtype=np.uint8)
 
 	# TODO: see if this can be numpy optimized
@@ -78,8 +77,6 @@ def _palettize_nametable(
 				nametable_indexed[y + 16 : y + 32, x      : x + 16] = palette_bl[nametable_chr_2bit[y + 16 : y + 32, x      : x + 16]]
 				nametable_indexed[y + 16 : y + 32, x + 16 : x + 32] = palette_br[nametable_chr_2bit[y + 16 : y + 32, x + 16 : x + 32]]
 
-	assert np.amax(nametable_indexed) < 64  # Ensure all pixels were touched (any missed pixels will still be 255)
-
 	return nametable_indexed
 
 
@@ -107,10 +104,10 @@ class Renderer:
 		self._chr_im_2bit = chr_to_array(self._rom_chr, width=16)
 		self._chr_im = grey_to_rgb(LUT_2BIT_TO_8BIT[self._chr_im_2bit])
 
-		self._nametables_indexed = np.zeros((480, 512), dtype=np.uint8)
+		self._nametables_indexed = np.full((480, 512), fill_value=255, dtype=np.uint8)
 		self._nametable_debug_im = np.zeros((480, 512, 3), dtype=np.uint8)
 
-		self._sprite_layer_indexed = np.zeros((256 + 16, 256 + 7), dtype=np.uint8)
+		self._sprite_layer_indexed = np.zeros((256 + 16, 256 + 7, 2), dtype=np.uint8)
 		self._sprite_layer_debug_im = np.zeros((256 + 16, 256 + 7, 3), dtype=np.uint8)
 
 		self._sprites_debug_im = np.zeros((64, 64, 3), dtype=np.uint8)
@@ -192,7 +189,7 @@ class Renderer:
 
 		return im
 
-	def _render_nametables(self, *, bg_palettes: np.ndarray) -> None:
+	def _render_nametables(self, *, bg_palettes: np.ndarray, bg_color: int) -> None:
 
 		vram = self._ppu.vram
 		ppuctrl = self._ppu.ppuctrl
@@ -251,7 +248,9 @@ class Renderer:
 		self._nametables_indexed = nametables_indexed
 
 		# Palettize
-		self._nametable_debug_im = NES_PALETTE_MAIN[self._nametables_indexed]
+		nametables_with_bg = self._nametables_indexed.copy()
+		nametables_with_bg[nametables_with_bg == 255] = bg_color
+		self._nametable_debug_im = NES_PALETTE_MAIN[nametables_with_bg]
 
 	def _render_sprites(
 			self,
@@ -270,12 +269,19 @@ class Renderer:
 		tile_idx_offset_8x8 = 256 if sprite_pattern_table_select else 0
 
 		# These arrays will include sprites that are off-screen too, hence why shape isn't (240, 256)
-		# Value 255 indicates a transparent pixel
-		sprites_indexed = np.full((256 + 16, 256 + 7), fill_value=255, dtype=np.uint8)
+		# 2nd dimension is depth:
+		#   0 = background
+		#   1 = behind background
+		#   -1 (255) = in front of background
+		# TODO: Try type np.int8 instead
+		sprites_indexed = np.zeros((256 + 16, 256 + 7, 2), dtype=np.uint8)
+		# TODO: reuse existing
+		# sprites_indexed = self._sprite_layer_indexed
+		# sprites_indexed.fill(0)
 
 		sprites_debug_indexed = np.zeros((64, 64), dtype=np.uint8)
 
-		outline_mask = np.zeros_like(sprites_indexed, dtype=np.bool)
+		outline_mask = np.zeros((256 + 16, 256 + 7), dtype=np.bool)
 
 		assert len(oam) == 256
 		for sprite_idx in reversed(range(64)):
@@ -289,9 +295,9 @@ class Renderer:
 			if y >= 240 and not render_offscreen_sprites:
 				continue
 
-			flip_v = bool(flags & 0b1000_0000)
-			flip_h = bool(flags & 0b0100_0000)
-			priority = bool(flags & 0b0010_0000)  # TODO: support sprite background priority (store a mask for it)
+			flip_v = flags & 0b1000_0000
+			flip_h = flags & 0b0100_0000
+			depth = 1 if (flags & 0b0010_0000) else 255
 			palette_idx = flags & 0x03
 
 			if sprites_8x16:
@@ -307,7 +313,8 @@ class Renderer:
 
 			tile_palettized = sprite_palettes[palette_idx, ...][tile]
 			tile_mask = tile > 0
-			sprites_indexed[y : y + h, x : x + 8][tile_mask] = tile_palettized[tile_mask]
+			sprites_indexed[y : y + h, x : x + 8, 0][tile_mask] = tile_palettized[tile_mask]
+			sprites_indexed[y : y + h, x : x + 8, 1][tile_mask] = depth
 
 			# TODO: different color depending on sprite flags, a bit like for sprite 0
 			# (need to make outline_mask RGB instead of bool)
@@ -316,7 +323,7 @@ class Renderer:
 			ys, xs = divmod(sprite_idx, 8)
 			xs *= 8
 			ys *= 8
-			# If 8x16, will only put top sprite into _sprites_debug_im (TODO: both)
+			# If 8x16, will only put top tile into _sprites_debug_im (TODO: both)
 			sprites_debug_indexed[ys : ys + 8, xs : xs + 8] = tile_palettized[:8, ...]
 
 		self._sprite_layer_indexed = sprites_indexed
@@ -324,8 +331,8 @@ class Renderer:
 		sprites_debug_indexed[sprites_debug_indexed >= 64] = 0
 		self._sprites_debug_im = NES_PALETTE_MAIN[sprites_debug_indexed]
 
-		sprites_im = sprites_indexed.copy()
-		sprite_im_bg = sprites_im >= 64
+		sprites_im = sprites_indexed[..., 0].copy()
+		sprite_im_bg = sprites_indexed[..., 1] == 0
 		sprites_im[sprite_im_bg] = 0x0F
 		sprites_im[:240, :256][sprite_im_bg[:240, :256]] = 0
 		sprites_im = NES_PALETTE_MAIN[sprites_im]
@@ -349,44 +356,95 @@ class Renderer:
 		self._current_palette_debug_im = NES_PALETTE_MAIN[palette_ram_idxs]
 		assert self._current_palette_debug_im.shape == (2, 16, 3)
 
+		# Value 255 indicates a transparent pixel
+		palettes[:, 0] = 255
+
 		bg_palettes = palettes[:4, :]
 		sprite_palettes = palettes[4:8, :]
 
-		# Value 255 indicates a transparent pixel
-		# TODO: may want to use 255 for bg_palettes too once handling sprite priority
-		# (treat this as 4 layers: bgcolor, bg sprites, nametable, fg sprites)
-
-		bg_palettes[:, 0] = bg_color
-		sprite_palettes[:, 0] = 255
-
 		return bg_color, bg_palettes, sprite_palettes
 
-	def render_frame(self):
+	def _composite_layers(self, bg_color: int) -> np.ndarray:
 
-		ppu = self._ppu
-		# TODO: make PPU getter functions instead of accessing members directly (and make the members private)
+		scroll_x = self._ppu.scroll_x
+		scroll_y = self._ppu.scroll_y
 
-		scroll_x = ppu.scroll_x
-		scroll_y = ppu.scroll_y
-
-		ppumask = ppu.ppumask
-		emphasis =                  (ppumask & 0b1110_0000) >> 5
-		assert 0 <= emphasis < 8, f'{emphasis=}'
-		# We could return early if rendering disabled, but then debug images would not get made
+		ppumask = self._ppu.ppumask
 		render_sprites =        bool(ppumask & 0b0001_0000)
 		render_bg =             bool(ppumask & 0b0000_1000)
 		sprites_left_8_pixels = bool(ppumask & 0b0000_0100)
 		bg_left_8_pixels =      bool(ppumask & 0b0000_0010)
-		greyscale =             bool(ppumask & 0b0000_0001)
 
-		# Palettes
+		nametables_onscreen = None
+		if render_bg:
+			nametables_onscreen = self._nametables_indexed[scroll_y : 240 + scroll_y, scroll_x : 256 + scroll_x]
+			if not bg_left_8_pixels:
+				nametables_onscreen[:, :8] = 255
+
+		sprites_onscreen = None
+		sprite_depth = None
+		if render_sprites:
+			sprites_onscreen = self._sprite_layer_indexed[:240, :256, 0]
+			sprite_depth     = self._sprite_layer_indexed[:240, :256, 1]
+			if not sprites_left_8_pixels:
+				sprite_depth[:, :8] = 0
+
+		assert (nametables_onscreen is None) or nametables_onscreen.shape == (240, 256)
+		assert (sprites_onscreen is None) or sprites_onscreen.shape == (240, 256)
+		assert (sprite_depth is None) or sprite_depth.shape == (240, 256)
+
+		# Base layer: background color
+		frame_indexed = np.full((240, 256), fill_value=bg_color, dtype=np.uint8)
+
+		# Background sprites
+		if render_sprites:
+			sprites_bg_mask = (sprite_depth == 1)
+			frame_indexed[sprites_bg_mask] = sprites_onscreen[sprites_bg_mask]
+
+		# Background nametables
+		if render_bg:
+			nametable_nonbg_mask = (nametables_onscreen < 64)
+			frame_indexed[nametable_nonbg_mask] = nametables_onscreen[nametable_nonbg_mask]
+
+		# Foreground sprites
+		if render_sprites:
+			sprites_fg_mask = (sprite_depth == 255)
+			frame_indexed[sprites_fg_mask] = sprites_onscreen[sprites_fg_mask]
+
+		return frame_indexed
+
+	def _palettize_frame(self, frame_indexed: np.ndarray) -> np.ndarray:
+		"""
+		:note: frame_indexed may be modified in-place
+		"""
+		ppumask = self._ppu.ppumask
+
+		greyscale = bool(ppumask & 0b0000_0001)
+		if greyscale:
+			# https://www.nesdev.org/wiki/PPU_registers#Color_control
+			frame_indexed &= 0x30
+
+		emphasis = (ppumask & 0b1110_0000) >> 5
+		assert 0 <= emphasis < 8, f'{emphasis=}'
+		palette = NES_PALETTES[emphasis]
+
+		return palette[frame_indexed]
+
+	def render_frame(self):
+
+		# TODO: make PPU getter functions instead of accessing members directly (and make the members private)
+		ppu = self._ppu
+
+		# We could return early if PPUMASK rendering disabled, but then debug images would not get made
+
+		# Load palettes
 		bg_color, bg_palettes, sprite_palettes = self._load_palettes()
 
 		# Make nametable (background) images
-		self._render_nametables(bg_palettes=bg_palettes)
+		self._render_nametables(bg_palettes=bg_palettes, bg_color=bg_color)
 
 		# Draw scroll area on debug nametable image
-		draw_rectangle(self._nametable_debug_im, (255, 0, 255), scroll_x, scroll_y, 256, 240, wrap=True)
+		draw_rectangle(self._nametable_debug_im, (255, 0, 255), ppu.scroll_x, ppu.scroll_y, 256, 240, wrap=True)
 
 		# Re-wrap debug nametable image
 		self._nametable_debug_im = self._rewrap(self._nametable_debug_im)
@@ -395,35 +453,12 @@ class Renderer:
 		self._render_sprites(sprite_palettes=sprite_palettes)
 
 		# Composite background & sprites into frame
+		frame_indexed = self._composite_layers(bg_color=bg_color)
 
-		if render_bg:
-			nametables_onscreen = self._nametables_indexed[scroll_y : 240 + scroll_y, scroll_x : 256 + scroll_x]
-			if not bg_left_8_pixels:
-				nametables_onscreen[:, :8] = bg_color
-		else:
-			nametables_onscreen = np.full((240, 256), fill_value=bg_color, dtype=np.uint8)
-		assert nametables_onscreen.shape == (240, 256)
+		# Palettize
+		self._frame_im = self._palettize_frame(frame_indexed)
 
-		if render_sprites:
-			sprites_onscreen = self._sprite_layer_indexed[:240, :256]
-			if not sprites_left_8_pixels:
-				sprites_onscreen[:, :8] = 255
-			frame_indexed = np.where(
-				sprites_onscreen < 64,
-				sprites_onscreen,
-				nametables_onscreen,
-			)
-		else:
-			frame_indexed = nametables_onscreen
-
-		if greyscale:
-			# https://www.nesdev.org/wiki/PPU_registers#Color_control
-			frame_indexed &= 0x30
-
-		# Apply NES palette (6-bit -> 8-bit RGB)
-		palette = NES_PALETTES[emphasis]
-		self._frame_im = palette[frame_indexed]
-
+		# Grab debug images from PPU
 		self._ppu_debug_im = ppu.debug_status_im.reshape((ppu.debug_status_im.shape[0], 1, 3)).copy()
 		self._sprite_zero_debug_im = ppu.sprite_zero_debug_im.copy()
 		ppu.done_rendering()

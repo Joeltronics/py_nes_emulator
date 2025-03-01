@@ -156,6 +156,8 @@ class Ppu:
 		:returns: (y, x); if sprite zero never gets hit, then returns out of bounds coordinate (SPRITE_ZERO_HIT_NONE)
 		"""
 
+		# TODO: split into more functions
+
 		self.sprite_zero_debug_im.fill(0)
 
 		# If sprite or BG rendering is disabled, we do not hit
@@ -476,6 +478,7 @@ class Ppu:
 
 		if rendering and (not self.sprite_zero_hit):
 			# If updating oustide VBLANK, update sprite zero location
+			# TODO optimization: Some PPU writes do not affect Sprite Zero Hit and do not need to update this
 			self.sprite_zero_hit_loc = self._calculate_sprite_zero_hit()
 
 	def nametable_vram_addr(self, addr: pointer16) -> int:
