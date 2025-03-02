@@ -31,6 +31,148 @@ NAMETABLE_LAYOUT_VERTICAL: Final[tuple[int, int, int, int]] = (
 SPRITE_ZERO_HIT_NONE: Final[tuple[int, int]] = (TOTAL_ROWS + 1, COLUMNS)
 
 
+def _sprite_zero_hit_load_sprite(
+		*,
+		oam: bytes | bytearray,
+		ppuctrl: uint8,
+		chr_tiles_8x8: np.ndarray,
+		chr_tiles_8x16: np.ndarray,
+		) -> tuple[np.ndarray, int, int] | tuple[None, None, None]:
+	"""
+	Load sprite 0, and adjust for flip flags
+
+	:returns: (tile, X, Y); if sprite is empty or out of bounds, returns (None, None, None) instead
+	"""
+
+	# Sprite Y values are offset by 1 (https://www.nesdev.org/wiki/PPU_OAM#Byte_0)
+	sprite_y = oam[0] + 1
+	sprite_tile_idx = oam[1]
+	sprite_flags = oam[2]
+	sprite_x = oam[3]
+
+	if sprite_y >= 240 or sprite_x >= 255:
+		# Due to hardware bug, x=255 cannot hit (this is checked again later for sprites near 255, but if sprite is
+		# definitely OOB then don't bother processing any further)
+		logger.debug('Sprite zero hit: sprite zero is out of bounds, no hit')
+		return None, None, None
+
+	if ppuctrl & 0b0010_0000:
+		sprite_tile = chr_tiles_8x16[sprite_tile_idx]
+	else:
+		sprite_tile_idx_offset_8x8 = 256 if (ppuctrl & 0b0000_1000) else 0
+		sprite_tile = chr_tiles_8x8[sprite_tile_idx + sprite_tile_idx_offset_8x8]
+
+	# If sprite is empty, don't bother with any of the other steps
+	# TODO optimization: precalculate all tiles that are empty
+	if not sprite_tile.any():
+		logger.debug('Sprite zero hit: sprite zero is empty, no hit')
+		return None, None, None
+
+	if sprite_flags & 0b1000_0000:
+		sprite_tile = np.flipud(sprite_tile)
+
+	if sprite_flags & 0b0100_0000:
+		sprite_tile = np.fliplr(sprite_tile)
+
+	return sprite_tile, sprite_x, sprite_y
+
+
+def _sprite_zero_hit_render_background_region(
+		*,
+		ppuctrl: uint8,
+		vram: bytes | bytearray,
+		vertical_mirroring: bool,
+		chr_tiles_8x8: np.ndarray,
+		first_tile_x: int,
+		first_tile_y: int,
+		) -> np.ndarray:
+
+	sprites_8x16 = bool(ppuctrl & 0b0010_0000)
+	bg_pattern_table_select = bool(ppuctrl & 0b0001_0000)
+
+	nametable_a = np.frombuffer(vram[ : 960], dtype=np.uint8).reshape((30, 32))
+	nametable_b = np.frombuffer(vram[ 0x400 : 0x400 + 960 ], dtype=np.uint8).reshape((30, 32))
+
+	bg_region = np.zeros((24 if sprites_8x16 else 16, 16), dtype=np.bool)
+
+	# TODO optimization: if sprite_x_within_region or sprite_y_within_region is 0, can iterate 1 less in that dimension
+	for y in range(3 if sprites_8x16 else 2):
+		tile_y = first_tile_y + y
+		for x in range(2):
+			tile_x = first_tile_x + x
+
+			if vertical_mirroring:
+				pick_b = bool(ppuctrl & 0b0000_0010)
+				if tile_y >= 30:
+					pick_b = not pick_b
+			else:
+				pick_b = bool(ppuctrl & 0b0000_0001)
+				if tile_x >= 32:
+					pick_b = not pick_b
+
+			nametable_tile_y = tile_y % 30
+			nametable_tile_x = tile_x % 32
+			nametable = nametable_b if pick_b else nametable_a
+
+			bg_tile_idx = int(nametable[nametable_tile_y, nametable_tile_x])
+
+			if bg_pattern_table_select:
+				bg_tile_idx += 256
+
+			bg_tile = chr_tiles_8x8[bg_tile_idx]
+			bg_region[8*y : 8*y + 8, 8*x : 8*x + 8] = bg_tile
+
+	return bg_region
+
+
+def _unraveled_argmax(arr: np.ndarray):
+	# Array is probably already in C-order, but explicitly ravel it to be sure
+	idx = np.argmax(arr.ravel(order='C'))
+	return np.unravel_index(idx, arr.shape)
+
+
+def _sprite_zero_hit_find_hit(
+		*,
+		ppumask: uint8,
+		sprite_tile: np.ndarray,
+		bg_region: np.ndarray,
+		sprite_x: int,
+		sprite_x_within_region: int,
+		sprite_y_within_region: int,
+		sprite_zero_debug_im: np.ndarray | None,
+		) -> tuple[int, int] | tuple[None, None]:
+
+	# Calculate background-sprite overlap
+
+	sprite_tile_overlap = np.logical_and(
+		sprite_tile,
+		bg_region[
+			sprite_y_within_region : sprite_y_within_region + sprite_tile.shape[0],
+			sprite_x_within_region : sprite_x_within_region + 8]
+	)
+
+	# Handle PPUMASK option to hide left 8 pixels
+
+	if (ppumask & 0b0000_0110) != 0b0000_0110:
+		region_start_screen_x = sprite_x - sprite_x_within_region
+		ignore_columns = 8 - region_start_screen_x
+		if ignore_columns > 0:
+			sprite_tile_overlap[:, :ignore_columns] = False
+			if sprite_zero_debug_im is not None:
+				sprite_zero_debug_im[:, :ignore_columns, :] //= 2
+
+	# Find first non-False pixel (if any)
+
+	y_within_sprite_tile, x_within_sprite_tile = _unraveled_argmax(sprite_tile_overlap)
+
+	assert 0 <= y_within_sprite_tile < sprite_tile.shape[0] and 0 <= x_within_sprite_tile < 8
+
+	if not sprite_tile_overlap[y_within_sprite_tile, x_within_sprite_tile]:
+		return None, None
+
+	return y_within_sprite_tile, x_within_sprite_tile
+
+
 class Ppu:
 	def __init__(
 			self,
@@ -156,8 +298,6 @@ class Ppu:
 		:returns: (y, x); if sprite zero never gets hit, then returns out of bounds coordinate (SPRITE_ZERO_HIT_NONE)
 		"""
 
-		# TODO: split into more functions
-
 		self.sprite_zero_debug_im.fill(0)
 
 		# If sprite or BG rendering is disabled, we do not hit
@@ -167,77 +307,28 @@ class Ppu:
 
 		# Load sprite
 
-		sprite_y = self.oam[0] + 1
-		if sprite_y >= 240:
-			logger.debug('Sprite zero hit: sprite zero is out of bounds, no hit')
+		sprite_tile, sprite_x, sprite_y = _sprite_zero_hit_load_sprite(
+			ppuctrl=self.ppuctrl,
+			oam=self.oam,
+			chr_tiles_8x8=self._chr_tiles_8x8_mask,
+			chr_tiles_8x16=self._chr_tiles_8x16_mask,
+		)
+		if sprite_tile is None:
 			return SPRITE_ZERO_HIT_NONE
-
-		sprite_tile_idx = self.oam[1]
-		sprite_flags = self.oam[2]
-		sprite_x = self.oam[3]
-
-		sprites_8x16 = self.sprites_8x16
-
-		bg_pattern_table_select = bool(self.ppuctrl & 0b0001_0000)
-
-		if sprites_8x16:
-			sprite_tile = self._chr_tiles_8x16_mask[sprite_tile_idx]
-		else:
-			sprite_tile_idx_offset_8x8 = 256 if (self.ppuctrl & 0b0000_1000) else 0
-			sprite_tile = self._chr_tiles_8x8_mask[sprite_tile_idx + sprite_tile_idx_offset_8x8]
-
-		# If sprite is empty, don't bother with any of the other checks
-		# TODO optimization: precalculate all tiles that are empty
-		if not sprite_tile.any():
-			logger.debug('Sprite zero hit: sprite zero is empty, no hit')
-			return SPRITE_ZERO_HIT_NONE
-
-		if sprite_flags & 0b1000_0000:
-			sprite_tile = np.flipud(sprite_tile)
-
-		if sprite_flags & 0b0100_0000:
-			sprite_tile = np.fliplr(sprite_tile)
 
 		# Load background tiles around this area
 
 		bg_first_tile_x = (self.scroll_x + sprite_x) // 8
 		bg_first_tile_y = (self.scroll_y + sprite_y) // 8
 
-		# Align sprite to BG tiles
-		sprite_x_within_region = self.scroll_x + sprite_x - (8 * bg_first_tile_x)
-		sprite_y_within_region = self.scroll_y + sprite_y - (8 * bg_first_tile_y)
-
-		nametable_a = np.frombuffer(self.vram[ : 960], dtype=np.uint8).reshape((30, 32))
-		nametable_b = np.frombuffer(self.vram[ 0x400 : 0x400 + 960 ], dtype=np.uint8).reshape((30, 32))
-
-		bg_region = np.zeros((24 if sprites_8x16 else 16, 16), dtype=np.bool)
-
-		# TODO optimization: if sprite_x_within_region or sprite_y_within_region is 0, can iterate 1 less in that dimension
-		for y in range(3 if sprites_8x16 else 2):
-			tile_y = bg_first_tile_y + y
-			for x in range(2):
-				tile_x = bg_first_tile_x + x
-
-				if self._vertical_mirroring:
-					pick_b = bool(self.ppuctrl & 0b0000_0010)
-					if tile_y >= 30:
-						pick_b = not pick_b
-				else:
-					pick_b = bool(self.ppuctrl & 0b0000_0001)
-					if tile_x >= 32:
-						pick_b = not pick_b
-
-				nametable_tile_y = tile_y % 30
-				nametable_tile_x = tile_x % 32
-				nametable = nametable_b if pick_b else nametable_a
-
-				bg_tile_idx = int(nametable[nametable_tile_y, nametable_tile_x])
-
-				if bg_pattern_table_select:
-					bg_tile_idx += 256
-
-				bg_tile = self._chr_tiles_8x8_mask[bg_tile_idx]
-				bg_region[8*y : 8*y + 8, 8*x : 8*x + 8] = bg_tile
+		bg_region = _sprite_zero_hit_render_background_region(
+			ppuctrl=self.ppuctrl,
+			vram=self.vram,
+			vertical_mirroring=self._vertical_mirroring,
+			chr_tiles_8x8=self._chr_tiles_8x8_mask,
+			first_tile_x=bg_first_tile_x,
+			first_tile_y=bg_first_tile_y,
+		)
 
 		if not bg_region.any():
 			logging.debug('Sprite zero hit: background region is empty, no hit')
@@ -245,40 +336,31 @@ class Ppu:
 
 		self.sprite_zero_debug_im[:bg_region.shape[0], :, 2] = np.where(bg_region, 255, 0)
 
+		# Align sprite relative to BG tiles
+
+		sprite_x_within_region = self.scroll_x + sprite_x - (8 * bg_first_tile_x)
+		sprite_y_within_region = self.scroll_y + sprite_y - (8 * bg_first_tile_y)
+		assert 0 <= sprite_x_within_region < 8
+		assert 0 <= sprite_y_within_region < 8
+
 		self.sprite_zero_debug_im[
 			sprite_y_within_region : sprite_y_within_region + sprite_tile.shape[0],
 			sprite_x_within_region : sprite_x_within_region + 8,
 			0] = np.where(sprite_tile, 255, 0)
 
-		# Check where background & sprite overlap
+		# Find hit
 
-		sprite_tile_overlap = np.logical_and(
-			sprite_tile,
-			bg_region[
-				sprite_y_within_region : sprite_y_within_region + sprite_tile.shape[0],
-				sprite_x_within_region : sprite_x_within_region + 8]
+		y_within_sprite_tile, x_within_sprite_tile = _sprite_zero_hit_find_hit(
+			ppumask=self.ppumask,
+			sprite_tile=sprite_tile,
+			bg_region=bg_region,
+			sprite_x=sprite_x,
+			sprite_x_within_region=sprite_x_within_region,
+			sprite_y_within_region=sprite_y_within_region,
+			sprite_zero_debug_im=self.sprite_zero_debug_im
 		)
 
-		# Handle PPUMASK
-
-		hide_leftmost_tile = (self.ppumask & 0b0000_0110) != 0b0000_0110
-		if hide_leftmost_tile:
-			region_start_screen_x = sprite_x - sprite_x_within_region
-			ignore_columns = 8 - region_start_screen_x
-			if ignore_columns > 0:
-				sprite_tile_overlap[:, :ignore_columns] = False
-				self.sprite_zero_debug_im[:, :ignore_columns, :] //= 2
-
-		# Find first non-False pixel (if any)
-
-		y_within_sprite_tile, x_within_sprite_tile = np.unravel_index(
-			# Array is probably already in C-order, but explicitly ravel it to be sure
-			np.argmax(sprite_tile_overlap.ravel(order='C')),
-			sprite_tile_overlap.shape)
-
-		assert 0 <= y_within_sprite_tile < 8 and 0 <= x_within_sprite_tile < 8
-
-		if not sprite_tile_overlap[y_within_sprite_tile, x_within_sprite_tile]:
+		if y_within_sprite_tile is None:
 			logging.debug(f'Sprite zero hit: sprite at ({sprite_x}, {sprite_y}) does not hit')
 			return SPRITE_ZERO_HIT_NONE
 
@@ -287,6 +369,8 @@ class Ppu:
 			sprite_y_within_region + y_within_sprite_tile,
 			sprite_x_within_region + x_within_sprite_tile,
 			...] = (0, 255, 0)
+
+		# Adjust coordinates to be relative to screen, and check bounds
 
 		screen_x = sprite_x + x_within_sprite_tile
 		screen_y = sprite_y + y_within_sprite_tile

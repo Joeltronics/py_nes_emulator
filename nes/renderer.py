@@ -28,10 +28,95 @@ def _save_chr(chr_array_rgb: np.ndarray, scale=2, filename='chr.png'):
 	im.save(filename)
 
 
+def _mirror(a: np.ndarray, b: np.ndarray, ppuctrl: uint8, vertical: bool) -> np.ndarray:
+	"""
+	Take nametables A & B and copy them to 2x2 layout, according to mirroring mode and PPUCTRL base nametable bits
+	"""
+
+	if vertical:
+		# TODO: is this right? test it
+		order = [b, a] if ppuctrl & 0b0000_0001 else [a, b]
+		row = np.hstack(order)
+		return np.vstack([row, row])
+	else:
+		order = [b, a] if ppuctrl & 0b0000_0010 else [a, b]
+		col = np.vstack(order)
+		return np.hstack([col, col])
+
+
+def _unapply_nametable_select(im: np.ndarray, ppuctrl: uint8, vertical_mirroring: bool) -> np.ndarray:
+	"""
+	Nametables are assembled the way the PPU reads them (scroll cannot wrap around, but equivalent behavior can be
+	achieved using PPUCTRL base nametable bits to swap the nametable order). This function takes an assembled order, and
+	un-applies the effect of PPUCTRL nametable select (meaning scroll effectively wraps around), which is a more
+	intuitive order for displaying.
+	"""
+
+	if vertical_mirroring:
+		# TODO: as in _mirror, test this
+		if ppuctrl & 0b0000_0001:
+			# Swap left & right
+			a = im[:, :256, ...]
+			b = im[:, 256:, ...]
+			return np.hstack((b, a))
+	else:
+		if ppuctrl & 0b0000_0010:
+			# Swap top & bottom
+			a = im[:240, ...]
+			b = im[240:, ...]
+			return np.vstack((b, a))
+
+	return im
+
+
+def _populate_nametable_tiles(
+		*,
+		nametable_a: bytes | bytearray,
+		nametable_b: bytes | bytearray,
+		chr_tiles_8x8: np.ndarray,
+		ppuctrl: uint8,
+		nametable_a_out: np.ndarray | None = None,
+		nametable_b_out: np.ndarray | None = None,
+		) -> tuple[np.ndarray, np.ndarray]:
+
+	# As an optimization, we have 1 function that populates both nametables
+	# TODO: If this can be numpy-optimized, then change it to only populate 1 nametable at a time
+
+	if nametable_a_out is None:
+		nametable_a_out = np.zeros((240, 256), dtype=np.uint8)
+	if nametable_b_out is None:
+		nametable_b_out = np.zeros((240, 256), dtype=np.uint8)
+
+	# Get tile indexes
+
+	tile_idx_offset = 256 if (ppuctrl & 0b0001_0000) else 0
+	nametable_a_tileidx = np.frombuffer(nametable_a[:960], dtype=np.uint8).reshape((240 // 8, 256 // 8)).astype(np.intp)
+	nametable_b_tileidx = np.frombuffer(nametable_b[:960], dtype=np.uint8).reshape((240 // 8, 256 // 8)).astype(np.intp)
+
+	# Copy tiles from CHR
+
+	# TODO optimization: see if this can be numpy optimized
+	# nametable_a_tiles = self._chr_tiles_8x8[nametable_a_tileidx]
+	# nametable_b_tiles = self._chr_tiles_8x8[nametable_b_tileidx]
+	# print(f'{nametable_a_tiles.shape=}')
+	# exit(1)
+
+	for y8 in range(240 // 8):
+		y = y8 * 8
+		for x8 in range(256 // 8):
+			x = x8 * 8
+			nametable_a_out[y : y + 8, x : x + 8] = chr_tiles_8x8[nametable_a_tileidx[y8, x8] + tile_idx_offset, ...]
+			nametable_b_out[y : y + 8, x : x + 8] = chr_tiles_8x8[nametable_b_tileidx[y8, x8] + tile_idx_offset, ...]
+
+	return nametable_a_out, nametable_b_out
+
+
 def _palettize_nametable(
 		nametable_data: bytes | bytearray,
 		nametable_chr_2bit: np.ndarray,
 		palettes: np.ndarray,
+		*,
+		out: np.ndarray | None = None,
 		) -> np.ndarray:
 
 	assert np.amax(nametable_chr_2bit) < 4
@@ -40,8 +125,8 @@ def _palettize_nametable(
 	# https://www.nesdev.org/wiki/PPU_attribute_tables
 	attribute_table = nametable_data[0x3C0:]
 
-	# Initialize to 255 to indicate background pixels
-	nametable_indexed = np.full((240, 256), fill_value=255, dtype=np.uint8)
+	if out is None:
+		out = np.zeros((240, 256), dtype=np.uint8)
 
 	# TODO: see if this can be numpy optimized
 	for y32 in range(240 // 32 + 1):
@@ -54,7 +139,7 @@ def _palettize_nametable(
 
 			palette_byte = attribute_table[x32 + (8 * y32)]
 
-			# Upper 2 tiles
+			# Top left & top right metatiles
 
 			palette_idx_tl = (palette_byte & 0b0000_0011)
 			palette_idx_tr = (palette_byte & 0b0000_1100) >> 2
@@ -62,22 +147,40 @@ def _palettize_nametable(
 			palette_tl = palettes[palette_idx_tl, :]
 			palette_tr = palettes[palette_idx_tr, :]
 
-			nametable_indexed[y : y + 16, x      : x + 16] = palette_tl[nametable_chr_2bit[y : y + 16, x      : x + 16]]
-			nametable_indexed[y : y + 16, x + 16 : x + 32] = palette_tr[nametable_chr_2bit[y : y + 16, x + 16 : x + 32]]
+			out[y : y + 16, x      : x + 16] = palette_tl[nametable_chr_2bit[y : y + 16, x      : x + 16]]
+			out[y : y + 16, x + 16 : x + 32] = palette_tr[nametable_chr_2bit[y : y + 16, x + 16 : x + 32]]
 
-			if not last_row:
-				# Lower 2 tiles
+			if last_row:
+				continue
 
-				palette_idx_bl = (palette_byte & 0b0011_0000) >> 4
-				palette_idx_br = (palette_byte & 0b1100_0000) >> 6
+			# Bottom left & bottom right metatiles
 
-				palette_bl = palettes[palette_idx_bl, :]
-				palette_br = palettes[palette_idx_br, :]
+			palette_idx_bl = (palette_byte & 0b0011_0000) >> 4
+			palette_idx_br = (palette_byte & 0b1100_0000) >> 6
 
-				nametable_indexed[y + 16 : y + 32, x      : x + 16] = palette_bl[nametable_chr_2bit[y + 16 : y + 32, x      : x + 16]]
-				nametable_indexed[y + 16 : y + 32, x + 16 : x + 32] = palette_br[nametable_chr_2bit[y + 16 : y + 32, x + 16 : x + 32]]
+			palette_bl = palettes[palette_idx_bl, :]
+			palette_br = palettes[palette_idx_br, :]
 
-	return nametable_indexed
+			out[y + 16 : y + 32, x      : x + 16] = palette_bl[nametable_chr_2bit[y + 16 : y + 32, x      : x + 16]]
+			out[y + 16 : y + 32, x + 16 : x + 32] = palette_br[nametable_chr_2bit[y + 16 : y + 32, x + 16 : x + 32]]
+
+	return out
+
+
+def _palettize_frame(frame_indexed: np.ndarray, ppumask: uint8) -> np.ndarray:
+	"""
+	:note: frame_indexed may be modified in-place
+	"""
+	greyscale = bool(ppumask & 0b0000_0001)
+	if greyscale:
+		# https://www.nesdev.org/wiki/PPU_registers#Color_control
+		frame_indexed &= 0x30
+
+	emphasis = (ppumask & 0b1110_0000) >> 5
+	assert 0 <= emphasis < 8, f'{emphasis=}'
+	palette = NES_PALETTES[emphasis]
+
+	return palette[frame_indexed]
 
 
 class Renderer:
@@ -95,6 +198,7 @@ class Renderer:
 		self._rom_chr = rom_chr
 		self._vertical_mirroring = rom_header.vertical_mirroring
 
+		self._frame_indexed = np.zeros((240, 256), dtype=np.uint8)
 		self._frame_im = np.zeros((240, 256, 3), dtype=np.uint8)
 
 		self._chr_tiles_8x8 = chr_to_stacked(self._rom_chr)
@@ -104,12 +208,23 @@ class Renderer:
 		self._chr_im_2bit = chr_to_array(self._rom_chr, width=16)
 		self._chr_im = grey_to_rgb(LUT_2BIT_TO_8BIT[self._chr_im_2bit])
 
+		self._nametable_a_2bit = np.zeros((240, 256), dtype=np.uint8)
+		self._nametable_b_2bit = np.zeros((240, 256), dtype=np.uint8)
+		self._nametable_a_indexed = np.zeros((240, 256), dtype=np.uint8)
+		self._nametable_b_indexed = np.zeros((240, 256), dtype=np.uint8)
 		self._nametables_indexed = np.full((480, 512), fill_value=255, dtype=np.uint8)
 		self._nametable_debug_im = np.zeros((480, 512, 3), dtype=np.uint8)
 
+		# These arrays will include sprites that are off-screen too, hence why shape isn't (240, 256)
+		# 2nd dimension is depth:
+		#   0 = background
+		#   1 = behind background
+		#   -1 (255) = in front of background
+		# TODO: Try type np.int8 instead
 		self._sprite_layer_indexed = np.zeros((256 + 16, 256 + 7, 2), dtype=np.uint8)
 		self._sprite_layer_debug_im = np.zeros((256 + 16, 256 + 7, 3), dtype=np.uint8)
 
+		self._sprites_debug_indexed = np.zeros((64, 64), dtype=np.uint8)
 		self._sprites_debug_im = np.zeros((64, 64, 3), dtype=np.uint8)
 
 		self._full_palette_debug_im = np.arange(64, dtype=np.uint8).reshape((4, 16))
@@ -157,38 +272,6 @@ class Renderer:
 	def get_sprite_zero_debug_im(self) -> np.ndarray:
 		return self._sprite_zero_debug_im
 
-	def _mirror(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:
-
-		ppuctrl = self._ppu.ppuctrl
-
-		if self._vertical_mirroring:
-			# TODO: is this right? test it
-			order = [b, a] if ppuctrl & 0b0000_0001 else [a, b]
-			row = np.hstack(order)
-			return np.vstack([row, row])
-		else:
-			order = [b, a] if ppuctrl & 0b0000_0010 else [a, b]
-			col = np.vstack(order)
-			return np.hstack([col, col])
-
-	def _rewrap(self, im: np.ndarray) -> np.ndarray:
-
-		ppuctrl = self._ppu.ppuctrl
-
-		if self._vertical_mirroring:
-			# TODO: as above, test this
-			if ppuctrl & 0b0000_0001:
-				a = im[:, :256, ...]
-				b = im[:, 256:, ...]
-				return np.hstack((b, a))
-		else:
-			if ppuctrl & 0b0000_0010:
-				a = im[:240, ...]
-				b = im[240:, ...]
-				return np.vstack((b, a))
-
-		return im
-
 	def _render_nametables(self, *, bg_palettes: np.ndarray, bg_color: int) -> None:
 
 		vram = self._ppu.vram
@@ -197,60 +280,46 @@ class Renderer:
 		nametable_a = vram[:0x400]
 		nametable_b = vram[0x400:0x800]
 
-		bg_pattern_table_select = bool(ppuctrl & 0b0001_0000)
-
-		# Get tile indexes
-
-		if True:
-			# Fast numpy code
-			nametable_a_tileidx = np.frombuffer(nametable_a[:960], dtype=np.uint8).reshape((240 // 8, 256 // 8)).astype(np.intp, copy=True)
-			nametable_b_tileidx = np.frombuffer(nametable_b[:960], dtype=np.uint8).reshape((240 // 8, 256 // 8)).astype(np.intp, copy=True)
-		else:
-			# Slow iterative code
-			nametable_a_tileidx = np.empty((240 // 8, 256 // 8), dtype=np.intp)
-			nametable_b_tileidx = np.empty((240 // 8, 256 // 8), dtype=np.intp)
-			for y in range(240 // 8):
-				for x in range(256 // 8):
-					addr = (256 // 8) * y + x
-					nametable_a_tileidx[y, x] = nametable_a[addr]
-					nametable_b_tileidx[y, x] = nametable_b[addr]
-
-		if bg_pattern_table_select:
-			nametable_a_tileidx += 256
-			nametable_b_tileidx += 256
-
-		# Copy tiles from CHR
-
-		# TODO: see if this can be numpy optimized
-		# nametable_a_tiles = self._chr_tiles_8x8[nametable_a_tileidx]
-		# nametable_b_tiles = self._chr_tiles_8x8[nametable_b_tileidx]
-		# print(f'{nametable_a_tiles.shape=}')
-		# exit(1)
-
-		nametable_a_2bit = np.empty((240, 256), dtype=np.uint8)
-		nametable_b_2bit = np.empty((240, 256), dtype=np.uint8)
-		tiles = self._chr_tiles_8x8  # Optimization: avoid self.__getattr__() inside loop
-		for y8 in range(240 // 8):
-			y = y8 * 8
-			for x8 in range(256 // 8):
-				x = x8 * 8
-				nametable_a_2bit[y : y + 8, x : x + 8] = tiles[nametable_a_tileidx[y8, x8], ...]
-				nametable_b_2bit[y : y + 8, x : x + 8] = tiles[nametable_b_tileidx[y8, x8], ...]
+		# Populate nametable tiles (2-bit out)
+		_populate_nametable_tiles(
+			nametable_a=nametable_a,
+			nametable_b=nametable_b,
+			nametable_a_out=self._nametable_a_2bit,
+			nametable_b_out=self._nametable_b_2bit,
+			chr_tiles_8x8=self._chr_tiles_8x8,
+			ppuctrl=ppuctrl,
+		)
 
 		# Apply palettes (2-bit -> 6-bit)
-		nametable_a_indexed = _palettize_nametable(nametable_data=nametable_a, nametable_chr_2bit=nametable_a_2bit, palettes=bg_palettes)
-		nametable_b_indexed = _palettize_nametable(nametable_data=nametable_b, nametable_chr_2bit=nametable_b_2bit, palettes=bg_palettes)
+		_palettize_nametable(
+			nametable_data=nametable_a, nametable_chr_2bit=self._nametable_a_2bit, palettes=bg_palettes,
+			out=self._nametable_a_indexed)
+		_palettize_nametable(
+			nametable_data=nametable_b, nametable_chr_2bit=self._nametable_b_2bit, palettes=bg_palettes,
+			out=self._nametable_b_indexed)
 
 		# TODO: attribute table debug palette image
 
 		# Apply mirroring
-		nametables_indexed = self._mirror(nametable_a_indexed, nametable_b_indexed)
-		self._nametables_indexed = nametables_indexed
+		self._nametables_indexed = _mirror(
+			a=self._nametable_a_indexed, b=self._nametable_b_indexed, ppuctrl=ppuctrl, vertical=self._vertical_mirroring)
 
-		# Palettize
+		self._make_nametable_debug_image(bg_color)
+
+	def _make_nametable_debug_image(self, bg_color: uint8):
+
+		ppu = self._ppu
+
 		nametables_with_bg = self._nametables_indexed.copy()
 		nametables_with_bg[nametables_with_bg == 255] = bg_color
 		self._nametable_debug_im = NES_PALETTE_MAIN[nametables_with_bg]
+
+		# Draw scroll area on debug nametable image
+		draw_rectangle(self._nametable_debug_im, (255, 0, 255), ppu.scroll_x, ppu.scroll_y, 256, 240, wrap=True)
+
+		# Un-apply nametable select in debug nametable image
+		self._nametable_debug_im = _unapply_nametable_select(
+			self._nametable_debug_im, ppuctrl=ppu.ppuctrl, vertical_mirroring=self._vertical_mirroring)
 
 	def _render_sprites(
 			self,
@@ -268,18 +337,11 @@ class Renderer:
 		sprite_pattern_table_select = bool(ppuctrl & 0b0000_1000)
 		tile_idx_offset_8x8 = 256 if sprite_pattern_table_select else 0
 
-		# These arrays will include sprites that are off-screen too, hence why shape isn't (240, 256)
-		# 2nd dimension is depth:
-		#   0 = background
-		#   1 = behind background
-		#   -1 (255) = in front of background
-		# TODO: Try type np.int8 instead
-		sprites_indexed = np.zeros((256 + 16, 256 + 7, 2), dtype=np.uint8)
-		# TODO: reuse existing
-		# sprites_indexed = self._sprite_layer_indexed
-		# sprites_indexed.fill(0)
+		sprites_indexed = self._sprite_layer_indexed
+		sprites_indexed.fill(0)
 
-		sprites_debug_indexed = np.zeros((64, 64), dtype=np.uint8)
+		sprites_debug_indexed = self._sprites_debug_indexed
+		sprites_debug_indexed.fill(0)
 
 		outline_mask = np.zeros((256 + 16, 256 + 7), dtype=np.bool)
 
@@ -288,7 +350,7 @@ class Renderer:
 
 			y, tile_idx, flags, x = oam[4*sprite_idx : 4*(sprite_idx + 1)]
 
-			# Y is offset by 1
+			# Sprite Y values are offset by 1 (https://www.nesdev.org/wiki/PPU_OAM#Byte_0)
 			# Technically it might be more accurate to apply this during compositing later, but this is a lot simpler
 			y += 1
 
@@ -326,8 +388,6 @@ class Renderer:
 			# If 8x16, will only put top tile into _sprites_debug_im (TODO: both)
 			sprites_debug_indexed[ys : ys + 8, xs : xs + 8] = tile_palettized[:8, ...]
 
-		self._sprite_layer_indexed = sprites_indexed
-
 		sprites_debug_indexed[sprites_debug_indexed >= 64] = 0
 		self._sprites_debug_im = NES_PALETTE_MAIN[sprites_debug_indexed]
 
@@ -364,7 +424,7 @@ class Renderer:
 
 		return bg_color, bg_palettes, sprite_palettes
 
-	def _composite_layers(self, bg_color: int) -> np.ndarray:
+	def _composite_layers(self, bg_color: int) -> None:
 
 		scroll_x = self._ppu.scroll_x
 		scroll_y = self._ppu.scroll_y
@@ -394,41 +454,22 @@ class Renderer:
 		assert (sprite_depth is None) or sprite_depth.shape == (240, 256)
 
 		# Base layer: background color
-		frame_indexed = np.full((240, 256), fill_value=bg_color, dtype=np.uint8)
+		self._frame_indexed.fill(bg_color)
 
 		# Background sprites
 		if render_sprites:
 			sprites_bg_mask = (sprite_depth == 1)
-			frame_indexed[sprites_bg_mask] = sprites_onscreen[sprites_bg_mask]
+			self._frame_indexed[sprites_bg_mask] = sprites_onscreen[sprites_bg_mask]
 
 		# Background nametables
 		if render_bg:
 			nametable_nonbg_mask = (nametables_onscreen < 64)
-			frame_indexed[nametable_nonbg_mask] = nametables_onscreen[nametable_nonbg_mask]
+			self._frame_indexed[nametable_nonbg_mask] = nametables_onscreen[nametable_nonbg_mask]
 
 		# Foreground sprites
 		if render_sprites:
 			sprites_fg_mask = (sprite_depth == 255)
-			frame_indexed[sprites_fg_mask] = sprites_onscreen[sprites_fg_mask]
-
-		return frame_indexed
-
-	def _palettize_frame(self, frame_indexed: np.ndarray) -> np.ndarray:
-		"""
-		:note: frame_indexed may be modified in-place
-		"""
-		ppumask = self._ppu.ppumask
-
-		greyscale = bool(ppumask & 0b0000_0001)
-		if greyscale:
-			# https://www.nesdev.org/wiki/PPU_registers#Color_control
-			frame_indexed &= 0x30
-
-		emphasis = (ppumask & 0b1110_0000) >> 5
-		assert 0 <= emphasis < 8, f'{emphasis=}'
-		palette = NES_PALETTES[emphasis]
-
-		return palette[frame_indexed]
+			self._frame_indexed[sprites_fg_mask] = sprites_onscreen[sprites_fg_mask]
 
 	def render_frame(self):
 
@@ -443,20 +484,14 @@ class Renderer:
 		# Make nametable (background) images
 		self._render_nametables(bg_palettes=bg_palettes, bg_color=bg_color)
 
-		# Draw scroll area on debug nametable image
-		draw_rectangle(self._nametable_debug_im, (255, 0, 255), ppu.scroll_x, ppu.scroll_y, 256, 240, wrap=True)
-
-		# Re-wrap debug nametable image
-		self._nametable_debug_im = self._rewrap(self._nametable_debug_im)
-
 		# Sprites
 		self._render_sprites(sprite_palettes=sprite_palettes)
 
 		# Composite background & sprites into frame
-		frame_indexed = self._composite_layers(bg_color=bg_color)
+		self._composite_layers(bg_color=bg_color)
 
 		# Palettize
-		self._frame_im = self._palettize_frame(frame_indexed)
+		self._frame_im = _palettize_frame(self._frame_indexed, ppumask=ppu.ppumask)
 
 		# Grab debug images from PPU
 		self._ppu_debug_im = ppu.debug_status_im.reshape((ppu.debug_status_im.shape[0], 1, 3)).copy()
