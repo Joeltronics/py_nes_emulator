@@ -37,11 +37,15 @@ def _sprite_zero_hit_load_sprite(
 		ppuctrl: uint8,
 		chr_tiles_8x8: np.ndarray,
 		chr_tiles_8x16: np.ndarray,
+		empty_tiles_8x8: list[bool],
+		empty_tiles_8x16: list[bool],
 		) -> tuple[np.ndarray, int, int] | tuple[None, None, None]:
 	"""
-	Load sprite 0, and adjust for flip flags
+	Load sprite 0, and flip according to sprite flags
 
-	:returns: (tile, X, Y); if sprite is empty or out of bounds, returns (None, None, None) instead
+	As an optimization, this takes a pre-calculated list of empty tiles
+
+	:returns: (tile, X, Y) if sprite is in-bounds and non-empty; (None, None, None) otherwise
 	"""
 
 	# Sprite Y values are offset by 1 (https://www.nesdev.org/wiki/PPU_OAM#Byte_0)
@@ -57,16 +61,18 @@ def _sprite_zero_hit_load_sprite(
 		return None, None, None
 
 	if ppuctrl & 0b0010_0000:
-		sprite_tile = chr_tiles_8x16[sprite_tile_idx]
+		chr_tiles, chr_empty = chr_tiles_8x16, empty_tiles_8x16
 	else:
-		sprite_tile_idx_offset_8x8 = 256 if (ppuctrl & 0b0000_1000) else 0
-		sprite_tile = chr_tiles_8x8[sprite_tile_idx + sprite_tile_idx_offset_8x8]
+		if ppuctrl & 0b0000_1000:
+			sprite_tile_idx += 256
+		chr_tiles, chr_empty = chr_tiles_8x8, empty_tiles_8x8
 
 	# If sprite is empty, don't bother with any of the other steps
-	# TODO optimization: precalculate all tiles that are empty
-	if not sprite_tile.any():
+	if chr_empty[sprite_tile_idx]:
 		logger.debug('Sprite zero hit: sprite zero is empty, no hit')
 		return None, None, None
+
+	sprite_tile = chr_tiles[sprite_tile_idx]
 
 	if sprite_flags & 0b1000_0000:
 		sprite_tile = np.flipud(sprite_tile)
@@ -182,8 +188,17 @@ class Ppu:
 
 		self.rom_chr: Final[bytes] = rom_chr
 
-		self._chr_tiles_8x8_mask = chr_to_stacked(self.rom_chr) > 0
+		# Optimization: arrange into (512, 8, 8) & (256, 16, 8) arrays now
+		self._chr_tiles_8x8_mask = chr_to_stacked(self.rom_chr, tall=False) > 0
 		self._chr_tiles_8x16_mask = chr_to_stacked(self.rom_chr, tall=True) > 0
+
+		# Optimization: pre-calculate which tiles are empty
+		self._empty_tiles_8x8 = [
+			(not self._chr_tiles_8x8_mask[idx].any()) for idx in range(self._chr_tiles_8x8_mask.shape[0])
+		]
+		self._empty_tiles_8x16 = [
+			(not self._chr_tiles_8x16_mask[idx].any()) for idx in range(self._chr_tiles_8x16_mask.shape[0])
+		]
 
 		self._vertical_mirroring = rom_header.vertical_mirroring
 
@@ -306,12 +321,13 @@ class Ppu:
 			return SPRITE_ZERO_HIT_NONE
 
 		# Load sprite
-
 		sprite_tile, sprite_x, sprite_y = _sprite_zero_hit_load_sprite(
 			ppuctrl=self.ppuctrl,
 			oam=self.oam,
 			chr_tiles_8x8=self._chr_tiles_8x8_mask,
 			chr_tiles_8x16=self._chr_tiles_8x16_mask,
+			empty_tiles_8x8=self._empty_tiles_8x8,
+			empty_tiles_8x16=self._empty_tiles_8x16,
 		)
 		if sprite_tile is None:
 			return SPRITE_ZERO_HIT_NONE
