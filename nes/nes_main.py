@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import logging
 import time
 
 from nes.apu import Apu
@@ -9,6 +10,9 @@ from nes.ppu import Ppu
 from nes.renderer import Renderer
 from nes.rom import Rom
 from nes.ui import Ui
+
+
+logger = logging.getLogger(__name__)
 
 
 class PerformanceTimer:
@@ -101,6 +105,7 @@ class Nes:
 		self.ppu = Ppu(
 			rom_chr=self.rom.chr,
 			rom_header=self.rom.header,
+			render_callback=self._render,
 		)
 
 		self.cpu = Cpu(
@@ -129,6 +134,16 @@ class Nes:
 				controllers=self.controllers,
 				renderer=self.renderer,
 			)
+
+	def _render(self, start_row: int, end_row: int) -> None:
+
+		if end_row <= start_row:
+			raise ValueError(f'{end_row=} must be > {start_row=}')
+
+		logger.debug(f'Rendering frame {self.ppu.frame_count} [{start_row}:{end_row}]')
+
+		if self.renderer:
+			pass  # TODO
 
 	def _handle_breakpoint(self):
 

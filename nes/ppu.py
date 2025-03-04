@@ -14,6 +14,10 @@ from nes.types import uint8, pointer16
 logger = logging.getLogger(__name__)
 
 
+# Inputs: first row to be rendered, first row not to be rendered (i.e. last row + 1)
+RenderCallbackFn = Callable[[int, int], None]
+
+
 COLUMNS: Final[int] = 340
 
 VBLANK_START_ROW: Final[int] = 240
@@ -184,9 +188,12 @@ class Ppu:
 			self,
 			rom_chr: bytes,
 			rom_header: INesHeader,
+			render_callback: RenderCallbackFn | None = None,
 			):
 
 		self.rom_chr: Final[bytes] = rom_chr
+		self._render_callback: RenderCallbackFn | None = render_callback
+		self._last_row_rendered: int | None = None
 
 		# Optimization: arrange into (512, 8, 8) & (256, 16, 8) arrays now
 		self._chr_tiles_8x8_mask = chr_to_stacked(self.rom_chr, tall=False) > 0
@@ -263,12 +270,42 @@ class Ppu:
 		ppu_cycles = 3 * cpu_cycles
 		self._tick_clock(ppu_cycles)
 
+	def _signal_render(self, end_of_row_idx: int | None = None):
+		"""
+		Signal that the renderer needs to render up to the current row (inclusive), because we are about to change PPU
+		state in a way that will affect rendering
+
+		:param end_of_row_idx: The last row to render, or None to use the current value of self.row
+		"""
+
+		if end_of_row_idx is None:
+			end_of_row_idx = self.row
+
+		if self._last_row_rendered is not None:
+			assert end_of_row_idx >= self._last_row_rendered, f'{end_of_row_idx=}, {self._last_row_rendered=}'
+
+		if end_of_row_idx == self._last_row_rendered:
+			return
+
+		if self._render_callback is not None:
+			# We're not doing pixel-exact emulation; the most accurate approximation we can get is if mid-row changes
+			# are applied on the next row. So render up to current row (inclusive)
+			start = 0 if (self._last_row_rendered is None) else (self._last_row_rendered + 1)
+			stop = min(end_of_row_idx + 1, VBLANK_START_ROW)
+			self._render_callback(start, stop)
+
+		if end_of_row_idx >= VBLANK_START_ROW:
+			self._last_row_rendered = None
+		else:
+			self._last_row_rendered = end_of_row_idx
+
 	def done_rendering(self) -> None:
 		"""
 		Indicate that rendering a frame is complete
+		(i.e. reset debug status image)
 		"""
-		self.debug_status_im[:] = 31
-		self.debug_status_im[VBLANK_START_ROW:, ...] = (127, 127, 127)
+		self.debug_status_im[:VBLANK_START_ROW, ...].fill(31)
+		self.debug_status_im[VBLANK_START_ROW:, ...].fill(127)
 
 	def _tick_clock(self, cycles: int) -> None:
 		# TODO: this is in a hot path, optimize it better (can finish multiple rows at once)
@@ -460,6 +497,8 @@ class Ppu:
 		else:
 			logger.debug(f'Frame {self.frame_count} VBLANK start (NMI disabled)')
 
+		self._signal_render()
+
 		if self.vblank_start_callback:
 			self.vblank_start_callback()
 
@@ -508,8 +547,14 @@ class Ppu:
 		Write register in the range 0x2000-0x2007
 		"""
 
+		# Some changes can be made mid-frame
 		# https://forums.nesdev.org/viewtopic.php?t=7890
+		# If changing mid-frame, we may need to trigger a render and/or update sprite zero hit location
+		# render has to happen before we make the write; sprite zero update has to happen after
+		# (In most cases, this change was triggered by sprite zero hit in the first place, so that means it's already
+		# happened and doesn't need to be updated - we have a check for that later)
 		rendering = (not self.vblank) and (self.ppumask & 0b0001_1000)
+		affects_sprite_zero = False
 
 		# FIXME: PPUSCROLL & PPUADDR share an internal register (as well as 2 bits of PPUCTRL)
 		# https://www.nesdev.org/wiki/PPU_scrolling
@@ -520,18 +565,30 @@ class Ppu:
 				# PPUCTRL
 				# Can be modified while rendering
 				logger.debug(f'Setting PPUCTRL=0x{value:02X}')
+
+				# Check if any bits were changed, ignoring NMI or VRAM address increment bits
+				if rendering and ((self.ppuctrl ^ value) & 0b0111_1011):
+					self._signal_render()
+					affects_sprite_zero = True
+
 				self.ppuctrl = value
+
 			case 0x2001:
 				# PPUMASK
 				# Can be modified while rendering
 				logger.debug(f'Setting PPUMASK=0x{value:02X}')
+				if rendering and self.ppumask != value:
+					self._signal_render()
+					affects_sprite_zero = True
 				self.ppumask = value
+
 			case 0x2003:
 				# OAMADDR
 				# Should not be modified while rendering
 				if rendering:
 					raise NotImplementedError('Behavior of writing OAMADDR while rendering is not implemented')
 				self.oamaddr = value
+
 			case 0x2004:
 				# OAMDATA
 				# Should not be modified while rendering
@@ -540,6 +597,11 @@ class Ppu:
 			case 0x2005:
 				# PPUSCROLL
 				# Can be modified while rendering
+
+				if rendering:
+					self._signal_render()
+					affects_sprite_zero = True
+
 				if not self.write_latch:
 					# 1st write: X
 					logger.debug(f'Setting PPUSCROLL X={value}')
@@ -576,9 +638,8 @@ class Ppu:
 
 		self.debug_status_im[self.row, 0] = 255
 
-		if rendering and (not self.sprite_zero_hit):
-			# If updating oustide VBLANK, update sprite zero location
-			# TODO optimization: Some PPU writes do not affect Sprite Zero Hit and do not need to update this
+		# If updating mid-frame and we haven't hit sprite zero yet, update sprite zero hit location
+		if rendering and affects_sprite_zero and not self.sprite_zero_hit:
 			self.sprite_zero_hit_loc = self._calculate_sprite_zero_hit()
 
 	def nametable_vram_addr(self, addr: pointer16) -> int:
