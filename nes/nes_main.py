@@ -124,6 +124,7 @@ class Nes:
 
 		self.ui = None
 		self.renderer = None
+		self.timer = None
 		if render:
 			self.renderer = Renderer(
 				ppu=self.ppu,
@@ -134,16 +135,27 @@ class Nes:
 				controllers=self.controllers,
 				renderer=self.renderer,
 			)
+			self.timer = PerformanceTimer()
+
+		self._last_line_rendered = 0
 
 	def _render(self, start_row: int, end_row: int) -> None:
 
+		self.timer.checkin('Emu')
+
 		if end_row <= start_row:
 			raise ValueError(f'{end_row=} must be > {start_row=}')
+		
+		assert end_row >= self._last_line_rendered, f'{end_row=}, {self._last_line_rendered=}'
 
-		logger.debug(f'Rendering frame {self.ppu.frame_count} [{start_row}:{end_row}]')
+		# logger.debug(f'Rendering frame {self.ppu.frame_count} [{start_row}:{end_row}]')
+		logger.info(f'Rendering frame {self.ppu.frame_count} [{start_row}:{end_row}]')
+
+		self._last_line_rendered = end_row
 
 		if self.renderer:
-			pass  # TODO
+			self.renderer.render_frame(start_row, end_row)
+			self.timer.checkin('Render')
 
 	def _handle_breakpoint(self):
 
@@ -168,7 +180,8 @@ class Nes:
 
 		if self.ui:
 			assert self.renderer
-			timer = PerformanceTimer()
+			assert self.timer
+			timer = self.timer
 
 			self.ui.draw()
 
@@ -179,9 +192,7 @@ class Nes:
 				self.run_until_next_vblank_start()
 				timer.checkin('Emu')
 
-				# TODO: don't only render at vblank, to allow for mid-frame PPU changes
-				self.renderer.render_frame()
-				timer.checkin('Render')
+				assert self._last_line_rendered >= 240
 
 				fps_str = timer.fps_str()
 
@@ -195,6 +206,8 @@ class Nes:
 				timer.checkin('Events')
 
 				timer.end_frame()
+
+				self._last_line_rendered = 0
 
 		else:
 

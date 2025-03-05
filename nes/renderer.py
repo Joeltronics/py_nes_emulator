@@ -325,8 +325,12 @@ class Renderer:
 			self,
 			*,
 			sprite_palettes: np.ndarray,
-			render_offscreen_sprites: bool = True,  # TODO: set this False, for optimization purposes
+			start_row: int,
+			end_row: int,
+			render_offscreen_sprites: bool = False,
 			) -> None:
+
+		first_segment = (start_row <= 0)
 
 		oam = self._ppu.oam
 		ppuctrl = self._ppu.ppuctrl
@@ -338,10 +342,11 @@ class Renderer:
 		tile_idx_offset_8x8 = 256 if sprite_pattern_table_select else 0
 
 		sprites_indexed = self._sprite_layer_indexed
-		sprites_indexed.fill(0)
-
 		sprites_debug_indexed = self._sprites_debug_indexed
-		sprites_debug_indexed.fill(0)
+
+		if first_segment:
+			sprites_indexed.fill(0)
+			sprites_debug_indexed.fill(0)
 
 		outline_mask = np.zeros((256 + 16, 256 + 7), dtype=np.bool)
 
@@ -354,7 +359,7 @@ class Renderer:
 			# Technically it might be more accurate to apply this during compositing later, but this is a lot simpler
 			y += 1
 
-			if y >= 240 and not render_offscreen_sprites:
+			if (not render_offscreen_sprites) and not (start_row - h <= y < end_row):
 				continue
 
 			flip_v = flags & 0b1000_0000
@@ -424,7 +429,9 @@ class Renderer:
 
 		return bg_color, bg_palettes, sprite_palettes
 
-	def _composite_layers(self, bg_color: int) -> None:
+	def _composite_layers(self, bg_color: int, start_row: int, end_row: int) -> None:
+
+		first_segment = (start_row <= 0)
 
 		scroll_x = self._ppu.scroll_x
 		scroll_y = self._ppu.scroll_y
@@ -439,7 +446,7 @@ class Renderer:
 		if render_bg:
 			nametables_onscreen = self._nametables_indexed[scroll_y : 240 + scroll_y, scroll_x : 256 + scroll_x]
 			if not bg_left_8_pixels:
-				nametables_onscreen[:, :8] = 255
+				nametables_onscreen[start_row:end_row, :8] = 255
 
 		sprites_onscreen = None
 		sprite_depth = None
@@ -447,31 +454,52 @@ class Renderer:
 			sprites_onscreen = self._sprite_layer_indexed[:240, :256, 0]
 			sprite_depth     = self._sprite_layer_indexed[:240, :256, 1]
 			if not sprites_left_8_pixels:
-				sprite_depth[:, :8] = 0
+				sprite_depth[start_row:end_row, :8] = 0
 
 		assert (nametables_onscreen is None) or nametables_onscreen.shape == (240, 256)
 		assert (sprites_onscreen is None) or sprites_onscreen.shape == (240, 256)
 		assert (sprite_depth is None) or sprite_depth.shape == (240, 256)
 
 		# Base layer: background color
-		self._frame_indexed.fill(bg_color)
+		# Assume palette RAM won't get written during rendering (this is difficult/risky in real hardware, and isn't
+		# currently implemented in PPU); that means we're fine to just fill entire frame once
+		if first_segment:
+			self._frame_indexed.fill(bg_color)
 
 		# Background sprites
 		if render_sprites:
-			sprites_bg_mask = (sprite_depth == 1)
-			self._frame_indexed[sprites_bg_mask] = sprites_onscreen[sprites_bg_mask]
+			assert sprites_onscreen is not None
+			sprites_bg_mask = (sprite_depth[start_row:end_row, ...] == 1)
+			self._frame_indexed[start_row:end_row, ...][sprites_bg_mask] = \
+				sprites_onscreen[start_row:end_row, ...][sprites_bg_mask]
 
 		# Background nametables
 		if render_bg:
-			nametable_nonbg_mask = (nametables_onscreen < 64)
-			self._frame_indexed[nametable_nonbg_mask] = nametables_onscreen[nametable_nonbg_mask]
+			assert nametables_onscreen is not None
+			nametable_nonbg_mask = (nametables_onscreen[start_row:end_row, ...] < 64)
+			self._frame_indexed[start_row:end_row, ...][nametable_nonbg_mask] = \
+				nametables_onscreen[start_row:end_row, ...][nametable_nonbg_mask]
 
 		# Foreground sprites
 		if render_sprites:
-			sprites_fg_mask = (sprite_depth == 255)
-			self._frame_indexed[sprites_fg_mask] = sprites_onscreen[sprites_fg_mask]
+			assert sprites_onscreen is not None
+			sprites_fg_mask = (sprite_depth[start_row:end_row, ...] == 255)
+			self._frame_indexed[start_row:end_row, ...][sprites_fg_mask] = \
+				sprites_onscreen[start_row:end_row, ...][sprites_fg_mask]
 
-	def render_frame(self):
+	def render_frame(self, start_row: int, end_row: int):
+
+		first_segment = (start_row <= 0)
+		last_segment = (end_row >= 239)
+		entire_frame = first_segment and last_segment
+
+		# FIXME: for some reason this can flicker with split-screen rendering
+		# e.g. in SMB, once we scroll past the first screen - something is wrong with base nametable getting set to 1
+		# It seems it renders properly on maybe 75% of frames
+		# PPUSCROLL gets updated twice on row 31, then PPUCTRL (base nametable address) gets updated on row 32
+		# Could be a timing issue, or could be relating to not implementing PPU shared internal registers properly
+
+		# TODO: right now this re-renders full screen, even if we're only rendering a small area
 
 		# TODO: make PPU getter functions instead of accessing members directly (and make the members private)
 		ppu = self._ppu
@@ -483,17 +511,19 @@ class Renderer:
 
 		# Make nametable (background) images
 		self._render_nametables(bg_palettes=bg_palettes, bg_color=bg_color)
+		# TODO: with split screen scroll, draw scroll area for just this region onto nametables
 
 		# Sprites
-		self._render_sprites(sprite_palettes=sprite_palettes)
+		self._render_sprites(sprite_palettes=sprite_palettes, start_row=start_row, end_row=end_row)
 
 		# Composite background & sprites into frame
-		self._composite_layers(bg_color=bg_color)
+		self._composite_layers(bg_color=bg_color, start_row=start_row, end_row=end_row)
 
 		# Palettize
-		self._frame_im = _palettize_frame(self._frame_indexed, ppumask=ppu.ppumask)
+		self._frame_im[start_row:end_row, ...] = _palettize_frame(self._frame_indexed[start_row:end_row, ...], ppumask=ppu.ppumask)
 
-		# Grab debug images from PPU
-		self._ppu_debug_im = ppu.debug_status_im.reshape((ppu.debug_status_im.shape[0], 1, 3)).copy()
-		self._sprite_zero_debug_im = ppu.sprite_zero_debug_im.copy()
-		ppu.done_rendering()
+		if last_segment:
+			# Grab debug images from PPU
+			self._ppu_debug_im = ppu.debug_status_im.reshape((ppu.debug_status_im.shape[0], 1, 3)).copy()
+			self._sprite_zero_debug_im = ppu.sprite_zero_debug_im.copy()
+			ppu.done_rendering()

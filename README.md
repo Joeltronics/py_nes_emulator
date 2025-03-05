@@ -19,9 +19,9 @@ While optimizing this well enough for real-time is out of scope, there are still
 
 The PPU does not run fully independently from the CPU. The CPU runs an instruction, then ticks the PPU by the appropriate number of cycles. So we don't have cycle-exact emulation, but it also means we only need to run the PPU once per CPU instruction. Additionally, many PPU checks only run at the end of a line rather than every pixel, saving us a lot of processing (at the expense of even more cycle-accuracy).
 
-We render an entire frame at once, rather than pixel-by-pixel or row-by-row. This allows us to use vectorized Numpy operations as much as possible. Right now, mid-frame PPU updates do not work because of this (see the list of working games below), but we could still render all rows up to the point where the PPU was updated all together.
+We render an entire frame at once (or portion of a frame, if the PPU is updated mid-frame), rather than pixel-by-pixel or row-by-row. This allows us to use vectorized Numpy operations as much as possible.
 
-Sprite Zero Hit is pre-calculated at the end of VBLANK using Numpy. It is also updated whenever the PPU is updated mid-frame (unless it has already hit).
+Sprite Zero Hit is pre-calculated at the end of VBLANK using Numpy. It is also updated whenever the PPU is updated mid-frame (if it hasn't hit already).
 
 There are some elements of PPU rendering that could be further optimized - for example, we are rendering all nametable data, even outside the area being shown on-screen. This is useful for debugging, but not the best for performance. Similarly, there are other debug graphics being generated that could be made optional.
 
@@ -37,33 +37,30 @@ Working or mostly-working:
 - **Donkey Kong**
 - **Ice Climber**
 - **Galaga**
-- **Balloon Fight**: works, but in Balloon Trip mode, the score scrolls with the level since we don't support split-screen rendering yet
-- **Ice Hockey**: works, but the title screen doesn't render properly due to lack of split-screen rendering
-- **Super Mario Bros**: works, but score scrolls with the level
+- **Balloon Fight**
+- **Ice Hockey**: the title screen doesn't render properly, likely from imprecise timing
+- **Super Mario Bros**: the status bar flickers once you scroll past the first screen, but otherwise it works properly
 
 Major problems:
 
-- **Excitebike**: works, but lack of split-screen rendering makes it completely unplayable, as the level does not scroll
+- **Excitebike**: Emulator hits an assert
 - **Bomberman**: Freezes on title screen. Oddly, it used to get further than this (but got stuck after starting the game), when the VBLANK bit wasn't being cleared on PPUSTATUS read.
 
 PPU & rendering issues:
 
-- Right now we only render once at the start of VBLANK, so mid-frame updates don't work
 - We don't limit to max 8 sprites per line
 	- This might sound like a limit we don't want, but some games actually use this intentionally (like doors in The Legend of Zelda)
 	- Sprite overflow flag is not set either, though thankfully there's only 1 commercial game listed on the nesdev wiki that depends on this, because of a hardware bug that makes the behavior unreliable in many cases
 	- See https://www.nesdev.org/wiki/Sprite_overflow_games
-- Sprite 0 hit is only line-accurate, not cycle-accurate
+- Sprite 0 hit is only line-accurate, not pixel-accurate
 - PPUSCROLL & PPUADDR sharing internal registers is not handled correctly
 - Exact behavior when updating PPU outside of VBLANK is not fully emulated
 
 Next goals:
 
-- Split-screen rendering, to support mid-frame updates
 - Code cleanups
 - Other PPU features & behaviors
 - Basic APU emulation (without actually playing audio yet - just show audio channel info on-screen)
-- Fix games that aren't working, and try more games
 
 Lower priority stuff:
 

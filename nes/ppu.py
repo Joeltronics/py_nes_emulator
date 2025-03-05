@@ -497,6 +497,7 @@ class Ppu:
 		else:
 			logger.debug(f'Frame {self.frame_count} VBLANK start (NMI disabled)')
 
+		logger.info('Start of VBLANK, signalling render')
 		self._signal_render()
 
 		if self.vblank_start_callback:
@@ -554,7 +555,7 @@ class Ppu:
 		# (In most cases, this change was triggered by sprite zero hit in the first place, so that means it's already
 		# happened and doesn't need to be updated - we have a check for that later)
 		rendering = (not self.vblank) and (self.ppumask & 0b0001_1000)
-		affects_sprite_zero = False
+		sprite_zero_affected = False
 
 		# FIXME: PPUSCROLL & PPUADDR share an internal register (as well as 2 bits of PPUCTRL)
 		# https://www.nesdev.org/wiki/PPU_scrolling
@@ -568,8 +569,9 @@ class Ppu:
 
 				# Check if any bits were changed, ignoring NMI or VRAM address increment bits
 				if rendering and ((self.ppuctrl ^ value) & 0b0111_1011):
+					logger.info(f'Updating PPUCTRL mid-frame {self.row}: {self.ppuctrl:08b} -> {value:08b}')
 					self._signal_render()
-					affects_sprite_zero = True
+					sprite_zero_affected = True
 
 				self.ppuctrl = value
 
@@ -578,8 +580,9 @@ class Ppu:
 				# Can be modified while rendering
 				logger.debug(f'Setting PPUMASK=0x{value:02X}')
 				if rendering and self.ppumask != value:
+					logger.info(f'Updating PPUMASK mid-frame {self.row}: {self.ppumask:08b} -> {value:08b}')
 					self._signal_render()
-					affects_sprite_zero = True
+					sprite_zero_affected = True
 				self.ppumask = value
 
 			case 0x2003:
@@ -599,8 +602,9 @@ class Ppu:
 				# Can be modified while rendering
 
 				if rendering:
+					logger.info(f'Updating PPUSCROLL mid-frame {self.row}')
 					self._signal_render()
-					affects_sprite_zero = True
+					sprite_zero_affected = True
 
 				if not self.write_latch:
 					# 1st write: X
@@ -639,7 +643,7 @@ class Ppu:
 		self.debug_status_im[self.row, 0] = 255
 
 		# If updating mid-frame and we haven't hit sprite zero yet, update sprite zero hit location
-		if rendering and affects_sprite_zero and not self.sprite_zero_hit:
+		if rendering and sprite_zero_affected and not self.sprite_zero_hit:
 			self.sprite_zero_hit_loc = self._calculate_sprite_zero_hit()
 
 	def nametable_vram_addr(self, addr: pointer16) -> int:
