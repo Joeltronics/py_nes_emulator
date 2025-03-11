@@ -49,6 +49,8 @@ def draw_rectangle(
 		wrap=False,
 		) -> None:
 
+	assert w >= 0 and h >= 0, f'{w=}, {h=}'
+
 	x1 = x
 	y1 = y
 	x2 = x + w - 1
@@ -56,13 +58,30 @@ def draw_rectangle(
 
 	if wrap:
 		arr_h, arr_w = arr.shape[:2]
-		x2_clipped = min(x2, arr_w - 1)
-		y2_clipped = min(y2, arr_h - 1)
-		arr[y1              , x1 : x2_clipped , ...] = color
-		arr[     y2_clipped , x1 : x2_clipped , ...] = color
-		arr[y1 : y2_clipped , x1                    , ...] = color
-		arr[y1 : y2_clipped ,      x2_clipped , ...] = color
-		# TODO: wrapped part
+
+		x1 %= arr_w
+		x2 %= arr_w
+
+		y1 %= arr_h
+		y2 %= arr_h
+
+		if x1 <= x2:
+			arr[y1, x1:x2, ...] = color
+			arr[y2, x1:x2, ...] = color
+		else:
+			arr[y1,   :x2, ...] = color
+			arr[y1,   :x2, ...] = color
+			arr[y2, x1:  , ...] = color
+			arr[y2, x1:  , ...] = color
+
+		if y1 <= y2:
+			arr[y1:y2, x1, ...] = color
+			arr[y1:y2, x2, ...] = color
+		else:
+			arr[  :y2, x1, ...] = color
+			arr[  :y2, x2, ...] = color
+			arr[y1:  , x1, ...] = color
+			arr[y1:  , x2, ...] = color
 
 	else:
 		arr[y1      , x1 : x2 , ...] = color

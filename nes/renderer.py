@@ -44,12 +44,14 @@ def _mirror(a: np.ndarray, b: np.ndarray, ppuctrl: uint8, vertical: bool) -> np.
 		return np.hstack([col, col])
 
 
-def _unapply_nametable_select(im: np.ndarray, ppuctrl: uint8, vertical_mirroring: bool) -> np.ndarray:
+def _apply_unapply_nametable_select(im: np.ndarray, ppuctrl: uint8, vertical_mirroring: bool) -> np.ndarray:
 	"""
 	Nametables are assembled the way the PPU reads them (scroll cannot wrap around, but equivalent behavior can be
 	achieved using PPUCTRL base nametable bits to swap the nametable order). This function takes an assembled order, and
 	un-applies the effect of PPUCTRL nametable select (meaning scroll effectively wraps around), which is a more
 	intuitive order for displaying.
+
+	It also works in the other direction
 	"""
 
 	if vertical_mirroring:
@@ -213,6 +215,7 @@ class Renderer:
 		self._nametable_a_indexed = np.zeros((240, 256), dtype=np.uint8)
 		self._nametable_b_indexed = np.zeros((240, 256), dtype=np.uint8)
 		self._nametables_indexed = np.full((480, 512), fill_value=255, dtype=np.uint8)
+		self._nametable_debug_scroll_rect = np.zeros((480, 512), dtype=np.bool)
 		self._nametable_debug_im = np.zeros((480, 512, 3), dtype=np.uint8)
 
 		# These arrays will include sprites that are off-screen too, hence why shape isn't (240, 256)
@@ -272,7 +275,7 @@ class Renderer:
 	def get_sprite_zero_debug_im(self) -> np.ndarray:
 		return self._sprite_zero_debug_im
 
-	def _render_nametables(self, *, bg_palettes: np.ndarray, bg_color: int) -> None:
+	def _render_nametables(self, *, bg_palettes: np.ndarray, bg_color: int, start_row: int, end_row: int) -> None:
 
 		vram = self._ppu.vram
 		ppuctrl = self._ppu.ppuctrl
@@ -304,22 +307,48 @@ class Renderer:
 		self._nametables_indexed = _mirror(
 			a=self._nametable_a_indexed, b=self._nametable_b_indexed, ppuctrl=ppuctrl, vertical=self._vertical_mirroring)
 
-		self._make_nametable_debug_image(bg_color)
+		self._make_nametable_debug_image(bg_color, start_row=start_row, end_row=end_row)
 
-	def _make_nametable_debug_image(self, bg_color: uint8):
+	def _make_nametable_debug_image(self, bg_color: uint8, start_row: int, end_row: int):
 
 		ppu = self._ppu
+		ppuctrl = ppu.ppuctrl
 
 		nametables_with_bg = self._nametables_indexed.copy()
 		nametables_with_bg[nametables_with_bg == 255] = bg_color
 		self._nametable_debug_im = NES_PALETTE_MAIN[nametables_with_bg]
 
 		# Draw scroll area on debug nametable image
-		draw_rectangle(self._nametable_debug_im, (255, 0, 255), ppu.scroll_x, ppu.scroll_y, 256, 240, wrap=True)
+
+		# self._nametable_debug_scroll_rect
+
+		# draw_rectangle(self._nametable_debug_im, (255, 0, 255), ppu.scroll_x, ppu.scroll_y, 256, 240, wrap=True)
 
 		# Un-apply nametable select in debug nametable image
-		self._nametable_debug_im = _unapply_nametable_select(
-			self._nametable_debug_im, ppuctrl=ppu.ppuctrl, vertical_mirroring=self._vertical_mirroring)
+		self._nametable_debug_im = _apply_unapply_nametable_select(
+			self._nametable_debug_im, ppuctrl=ppuctrl, vertical_mirroring=self._vertical_mirroring)
+
+		x = ppu.scroll_x
+		y = ppu.scroll_y + start_row
+
+		if ppuctrl & 0b0000_0001:
+			x += 256
+		if ppuctrl & 0b0000_0010:
+			y += 256
+
+		w = 256
+		h = end_row - start_row
+
+
+		# self._nametable_debug_scroll_rect = _apply_unapply_nametable_select(
+		# 	self._nametable_debug_scroll_rect, ppuctrl=ppuctrl, vertical_mirroring=self._vertical_mirroring)
+
+		draw_rectangle(self._nametable_debug_scroll_rect, True, x, y, w, h, wrap=True)
+		self._nametable_debug_im[self._nametable_debug_scroll_rect] = (255, 0, 255)
+
+		# self._nametable_debug_scroll_rect = _apply_unapply_nametable_select(
+		# 	self._nametable_debug_scroll_rect, ppuctrl=ppuctrl, vertical_mirroring=self._vertical_mirroring)
+
 
 	def _render_sprites(
 			self,
@@ -493,6 +522,9 @@ class Renderer:
 		last_segment = (end_row >= 239)
 		entire_frame = first_segment and last_segment
 
+		if first_segment:
+			self._nametable_debug_scroll_rect.fill(False)
+
 		# FIXME: for some reason this can flicker with split-screen rendering
 		# e.g. in SMB, once we scroll past the first screen - something is wrong with base nametable getting set to 1
 		# It seems it renders properly on maybe 75% of frames
@@ -510,7 +542,7 @@ class Renderer:
 		bg_color, bg_palettes, sprite_palettes = self._load_palettes()
 
 		# Make nametable (background) images
-		self._render_nametables(bg_palettes=bg_palettes, bg_color=bg_color)
+		self._render_nametables(bg_palettes=bg_palettes, bg_color=bg_color, start_row=start_row, end_row=end_row)
 		# TODO: with split screen scroll, draw scroll area for just this region onto nametables
 
 		# Sprites

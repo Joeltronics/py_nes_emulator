@@ -40,7 +40,7 @@ Working or mostly-working:
 - **Balloon Fight**
 - **Excitebike**
 - **Ice Hockey**: the title screen doesn't render properly, likely from imprecise timing
-- **Super Mario Bros**: the status bar flickers once you scroll past the first screen, but otherwise it works properly
+- **Super Mario Bros**: the status bar flickers once you scroll past the first screen (seems to be a problem with nametable select not getting set correctly), but otherwise it works properly
 
 Major problems:
 
