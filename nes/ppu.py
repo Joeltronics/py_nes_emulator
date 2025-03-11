@@ -14,8 +14,8 @@ from nes.types import uint8, pointer16
 logger = logging.getLogger(__name__)
 
 
-# Inputs: first row to be rendered, first row not to be rendered (i.e. last row + 1)
-RenderCallbackFn = Callable[[int, int], None]
+# Inputs: frame index, first row to be rendered, first row not to be rendered (i.e. last row + 1)
+RenderCallbackFn = Callable[[int, int, int], None]
 
 
 COLUMNS: Final[int] = 340
@@ -284,7 +284,8 @@ class Ppu:
 		if self._last_row_rendered is not None:
 			assert end_of_row_idx >= self._last_row_rendered, f'{end_of_row_idx=}, {self._last_row_rendered=}'
 
-		if end_of_row_idx == self._last_row_rendered:
+		# If line has already been rendered, or this is pre-render line, skip it
+		if end_of_row_idx == self._last_row_rendered or end_of_row_idx >= VBLANK_END_ROW:
 			return
 
 		if self._render_callback is not None:
@@ -292,7 +293,7 @@ class Ppu:
 			# are applied on the next row. So render up to current row (inclusive)
 			start = 0 if (self._last_row_rendered is None) else (self._last_row_rendered + 1)
 			stop = min(end_of_row_idx + 1, VBLANK_START_ROW)
-			self._render_callback(start, stop)
+			self._render_callback(self.frame_count, start, stop)
 
 		if end_of_row_idx >= VBLANK_START_ROW:
 			self._last_row_rendered = None
@@ -497,7 +498,7 @@ class Ppu:
 		else:
 			logger.debug(f'Frame {self.frame_count} VBLANK start (NMI disabled)')
 
-		logger.info('Start of VBLANK, signalling render')
+		logger.debug('Start of VBLANK, signalling render')
 		self._signal_render()
 
 		if self.vblank_start_callback:
@@ -569,7 +570,7 @@ class Ppu:
 
 				# Check if any bits were changed, ignoring NMI or VRAM address increment bits
 				if rendering and ((self.ppuctrl ^ value) & 0b0111_1011):
-					logger.info(f'Updating PPUCTRL mid-frame {self.row}: {self.ppuctrl:08b} -> {value:08b}')
+					logger.debug(f'Updating PPUCTRL mid-frame {self.frame_count}:{self.row}: {self.ppuctrl:08b} -> {value:08b}')
 					self._signal_render()
 					sprite_zero_affected = True
 
@@ -580,7 +581,7 @@ class Ppu:
 				# Can be modified while rendering
 				logger.debug(f'Setting PPUMASK=0x{value:02X}')
 				if rendering and self.ppumask != value:
-					logger.info(f'Updating PPUMASK mid-frame {self.row}: {self.ppumask:08b} -> {value:08b}')
+					logger.debug(f'Updating PPUMASK mid-frame {self.frame_count}:{self.row}: {self.ppumask:08b} -> {value:08b}')
 					self._signal_render()
 					sprite_zero_affected = True
 				self.ppumask = value
@@ -602,7 +603,7 @@ class Ppu:
 				# Can be modified while rendering
 
 				if rendering:
-					logger.info(f'Updating PPUSCROLL mid-frame {self.row}')
+					logger.debug(f'Updating PPUSCROLL mid-frame {self.frame_count}:{self.row}')
 					self._signal_render()
 					sprite_zero_affected = True
 

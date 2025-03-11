@@ -137,21 +137,20 @@ class Nes:
 			)
 			self.timer = PerformanceTimer()
 
-		self._last_line_rendered = 0
+		self._last_line_rendered = (0, 0)
 
-	def _render(self, start_row: int, end_row: int) -> None:
+	def _render(self, frame_idx: int, start_row: int, end_row: int) -> None:
 
 		self.timer.checkin('Emu')
 
 		if end_row <= start_row:
 			raise ValueError(f'{end_row=} must be > {start_row=}')
 		
-		assert end_row >= self._last_line_rendered, f'{end_row=}, {self._last_line_rendered=}'
+		assert (frame_idx, end_row) >= self._last_line_rendered, f'{frame_idx}:{start_row}:{end_row}, {self._last_line_rendered=}'
 
-		# logger.debug(f'Rendering frame {self.ppu.frame_count} [{start_row}:{end_row}]')
-		logger.info(f'Rendering frame {self.ppu.frame_count} [{start_row}:{end_row}]')
+		logger.debug(f'Rendering frame {self.ppu.frame_count} [{start_row}:{end_row}]')
 
-		self._last_line_rendered = end_row
+		self._last_line_rendered = (frame_idx, end_row)
 
 		if self.renderer:
 			self.renderer.render_frame(start_row, end_row)
@@ -192,7 +191,7 @@ class Nes:
 				self.run_until_next_vblank_start()
 				timer.checkin('Emu')
 
-				assert self._last_line_rendered >= 240
+				assert self._last_line_rendered[1] >= 240
 
 				fps_str = timer.fps_str()
 
@@ -206,8 +205,6 @@ class Nes:
 				timer.checkin('Events')
 
 				timer.end_frame()
-
-				self._last_line_rendered = 0
 
 		else:
 

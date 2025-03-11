@@ -38,12 +38,12 @@ Working or mostly-working:
 - **Ice Climber**
 - **Galaga**
 - **Balloon Fight**
+- **Excitebike**
 - **Ice Hockey**: the title screen doesn't render properly, likely from imprecise timing
 - **Super Mario Bros**: the status bar flickers once you scroll past the first screen, but otherwise it works properly
 
 Major problems:
 
-- **Excitebike**: Emulator hits an assert
 - **Bomberman**: Freezes on title screen. Oddly, it used to get further than this (but got stuck after starting the game), when the VBLANK bit wasn't being cleared on PPUSTATUS read.
 
 PPU & rendering issues:
