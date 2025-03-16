@@ -191,6 +191,8 @@ class Ppu:
 			render_callback: RenderCallbackFn | None = None,
 			):
 
+		# TODO: make members private
+
 		self.rom_chr: Final[bytes] = rom_chr
 		self._render_callback: RenderCallbackFn | None = render_callback
 		self._last_row_rendered: int | None = None
@@ -237,6 +239,7 @@ class Ppu:
 		self.nmi: bool = False
 
 		self.sprite_zero_hit_loc: tuple[int, int] = SPRITE_ZERO_HIT_NONE
+		self._waiting_for_sprite_zero_hit: bool = False
 
 		self.odd_frame: bool = False
 
@@ -311,9 +314,22 @@ class Ppu:
 	def _tick_clock(self, cycles: int) -> None:
 		# TODO: this is in a hot path, optimize it better (can finish multiple rows at once)
 		self.col += cycles
+
+		if self._waiting_for_sprite_zero_hit:
+			self._check_sprite_zero_hit()
+
 		while self.col >= COLUMNS:
 			self.col -= COLUMNS
 			self._finish_row()
+
+	def _check_sprite_zero_hit(self) -> None:
+		row = self.row
+		sprite_zero_row, sprite_zero_col = self.sprite_zero_hit_loc
+		if (row > sprite_zero_row) or (row == sprite_zero_row and self.col >= sprite_zero_col):
+			logger.debug(f'Sprite zero hit on row {row}')
+			self._waiting_for_sprite_zero_hit = False
+			self.ppustatus |= 0b0100_0000
+			self.debug_status_im[row, 1] = 255
 
 	def _finish_row(self) -> None:
 
@@ -322,20 +338,20 @@ class Ppu:
 
 		assert row_num < TOTAL_ROWS
 
-		if row_num < 240:
-			# TODO accuracy: fire this as soon as we hit the relevant pixel, not at the end of the row
-			if row_num == self.sprite_zero_hit_loc[0]:
-				logger.debug(f'Sprite zero hit on row {row_num}')
-				self.ppustatus |= 0b0100_0000
-				self.debug_status_im[row_num, 1] = 255
+		if row_num == VBLANK_START_ROW:
+			if self._waiting_for_sprite_zero_hit:
+				self._check_sprite_zero_hit()
 
-		elif row_num == VBLANK_START_ROW:
 			# TODO accuracy: technically this occurs 1 PPU clock later
 			self._vblank_start()
 
-		elif row_num == VBLANK_END_ROW:
-			# TODO accuracy: technically this occurs 1 PPU clock later
-			self._vblank_end()
+		else:
+			if row_num == VBLANK_END_ROW:
+				# TODO accuracy: technically this occurs 1 PPU clock later
+				self._vblank_end()
+
+			if self._waiting_for_sprite_zero_hit:
+				self._check_sprite_zero_hit()
 
 		self.row = row_num = (row_num + 1) % TOTAL_ROWS
 
@@ -344,6 +360,10 @@ class Ppu:
 			if self.odd_frame:
 				self.col += 1
 			self.odd_frame = not self.odd_frame
+
+	def _update_sprite_zero_hit_loc(self) -> None:
+		self.sprite_zero_hit_loc = self._calculate_sprite_zero_hit()
+		self._waiting_for_sprite_zero_hit = (not self.sprite_zero_hit) and (self.sprite_zero_hit_loc[0] < VBLANK_START_ROW)
 
 	def _calculate_sprite_zero_hit(self) -> tuple[int, int]:
 		"""
@@ -458,6 +478,13 @@ class Ppu:
 		vblank_was = self.vblank
 		row_start = self.row
 
+		if self._waiting_for_sprite_zero_hit:
+			# Tick ahead to sprite zero hit
+			...  # TODO
+		else:
+			# Tick ahead to VBLANK
+			...  # TODO
+
 		# Tick ahead to end of this line
 		# This also prevents self._col from overflowing on an odd frame
 		columns_remaining = COLUMNS - self.col
@@ -474,7 +501,7 @@ class Ppu:
 			# Optimization: skip going through self._tick_clock(COLUMNS) or incrementing self._col
 			self._finish_row()
 			# Note that _finish_row() can increment self.col by 1 on odd frame, but overflow should not be possible here
-			# due to _tick_clock(columns_remaining) aboive
+			# due to _tick_clock(columns_remaining) above
 			assert self.col <= 1
 
 		row_end = self.row
@@ -490,6 +517,7 @@ class Ppu:
 
 	def _vblank_start(self):
 		# Set vblank
+		self._waiting_for_sprite_zero_hit = False
 		self.ppustatus |= 0b1000_0000
 		self.vblank = True
 		if self.vblank_nmi_enable:
@@ -514,7 +542,7 @@ class Ppu:
 		if self.vblank_end_callback:
 			self.vblank_end_callback()
 
-		self.sprite_zero_hit_loc = self._calculate_sprite_zero_hit()
+		self._update_sprite_zero_hit_loc()
 
 	def read_reg_from_cpu(self, addr: pointer16) -> uint8:
 		"""
@@ -645,7 +673,7 @@ class Ppu:
 
 		# If updating mid-frame and we haven't hit sprite zero yet, update sprite zero hit location
 		if rendering and sprite_zero_affected and not self.sprite_zero_hit:
-			self.sprite_zero_hit_loc = self._calculate_sprite_zero_hit()
+			self._update_sprite_zero_hit_loc()
 
 	def nametable_vram_addr(self, addr: pointer16) -> int:
 		nametable_idx, addr_low = divmod(addr & 0x0FFF, 0x400)
